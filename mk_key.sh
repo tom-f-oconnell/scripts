@@ -1,6 +1,7 @@
 #!/bin/bash
 
 # TODO check for existing keys first
+# put email in envvar in movein? used elsewhere?
 DEFAULT_EMAIL="toconnel@caltech.edu"
 read -p "Email (default $DEFAULT_EMAIL)" email
 email=${email:-$DEFAULT_EMAIL}
