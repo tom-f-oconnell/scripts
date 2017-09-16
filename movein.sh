@@ -20,6 +20,7 @@ sudo apt install keepassx
 cp /usr/share/applications/ubuntu-amazon-default.desktop ~/.local/share/applications/ubuntu-amazon-default.desktop
 echo Hidden=true >> ~/.local/share/applications/ubuntu-amazon-default.desktop
 
-mkdir src
+mkdir ~/src
+mkdir -p ~/catkin/src
 
 # TODO alt-j / k volume shortcuts
