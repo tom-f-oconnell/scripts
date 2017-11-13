@@ -1,6 +1,7 @@
 #!/bin/bash
 
-sudo apt install libgtk-3-dev python-wxgtk3.0 python-wxtools libwxgtk3.0-dev python-wxgtk3.0 python-wxgtk3.0-dev libglew-dev libglm-dev swig
+sudo apt update
+sudo apt install -y libgtk-3-dev python-wxgtk3.0 python-wxtools libwxgtk3.0-dev python-wxgtk3.0 python-wxgtk3.0-dev libglew-dev libglm-dev swig
 # also necessary?: freeglut3, libcairo2-dev, libgtk-3-dev, gstreamer1.0
 # (might not be valid packages, taken from ~/.bash_history)
 

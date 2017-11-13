@@ -1,7 +1,8 @@
 #!/bin/bash
 
 sudo apt update
-sudo apt install bison flex libx11-dev
+sudo apt install -y automake
+sudo apt install -y bison flex libx11-dev
 
 cd ~/src
 git clone git://git.code.sf.net/p/ngspice/ngspice
