@@ -1,6 +1,7 @@
 #!/bin/bash
 
 sudo apt update
+sudo apt install -y libreadline-dev
 sudo apt install -y automake
 sudo apt install -y bison flex libx11-dev
 
