@@ -7,7 +7,7 @@ sudo apt install -y bison flex libx11-dev
 
 # only necessary for compiling (GUI? CLI?) without --with-ngshared option
 # (with this option, CLI / GUI is not compiled / installed)
-sudo apt install libxaw7-dev
+sudo apt install -y libxaw7-dev
 
 cd ~/src
 git clone git://git.code.sf.net/p/ngspice/ngspice
