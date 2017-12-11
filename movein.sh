@@ -1,9 +1,9 @@
 #!/bin/bash
 
-sudo apt install vim-nox
-sudo add apt-repository ppa:eugenesan/ppa
+sudo add apt-repository -y ppa:eugenesan/ppa
 sudo apt update
-sudo apt install keepassx
+sudo apt install -y vim-nox
+sudo apt install -y keepassx
 
 # TODO install dotfiles from github thing
 # TODO install conda in a way that won't conflict with ROS?
@@ -13,6 +13,7 @@ sudo apt install keepassx
 
 # change setting for multiple workspaces, only current icons visible,
 
+# TODO redshift?
 
 # make Amazon application icon hidden in dashboard search
 # can't install package that contains it (unity-webapps-common)
@@ -24,3 +25,6 @@ mkdir ~/src
 mkdir -p ~/catkin/src
 
 # TODO alt-j / k volume shortcuts
+# TODO install mendeley?
+# TODO same shortcuts in mendeley
+# TODO install firefox w/ settings (vim keybinds, etc)
