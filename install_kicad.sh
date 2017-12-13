@@ -9,7 +9,7 @@ sudo apt install -y libgtk-3-dev python-wxgtk3.0 python-wxtools libwxgtk3.0-dev 
 # or find a package that includes the shared library in the apt repos
 
 cd ~/src
-git clone -b master https://git.launchpad.net/kicad
+git clone -b master git://git.launchpad.net/kicad
 cd kicad
 
 mkdir -p build/release
@@ -23,3 +23,18 @@ cd build/release
 cmake -DCMAKE_BUILD_TYPE=Release -DKICAD_SCRIPTING=ON -DKICAD_SCRIPTING_MODULES=ON -DKICAD_SCRIPTING_WXPYTHON=ON -DKICAD_SPICE=ON ../../
 make -j8
 sudo make install
+
+# include KiBoM too
+cd ~/src
+git clone git://github.com/SchrodingersGat/KiBoM
+
+# TODO test, then uncomment
+
+# add plugin, as done w/ GUI in Kicad
+# TODO check this file is created at this point (might need to run kicad?)
+# creating it before default are populated might be a bad thing...
+#EESCHEMA_CONFIG="~/.config/kicad/eeschema"
+
+# TODO can i just append to the end or does order matter?
+#echo 'bom_plugins=(plugins  (plugin KiBOM_CLI (cmd "python \\"/home/tom/src/KiBoM/KiBOM_CLI.py\\" \\"%I\\" \\"%O\\"")))' >> ${EESCHEMA_CONFIG}
+#echo 'bom_plugin_selected=KiBOM_CLI' >> ${EESCHEMA_CONFIG}

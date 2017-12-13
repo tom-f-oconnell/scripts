@@ -28,3 +28,8 @@ mkdir -p ~/catkin/src
 # TODO install mendeley?
 # TODO same shortcuts in mendeley
 # TODO install firefox w/ settings (vim keybinds, etc)
+# TODO how to configure tridactyl (only that works for newest firefox as of late 2017)
+# to have ":bind i tabclose"?
+# also:
+# :bind h tableft -1
+# :bind l tableft
