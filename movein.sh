@@ -2,7 +2,8 @@
 
 sudo add apt-repository -y ppa:eugenesan/ppa
 sudo apt update
-sudo apt install -y vim-nox
+# vim-gtk was compiled with system clipboard support, unlike vim-nox
+sudo apt install -y vim-gtk
 sudo apt install -y keepassx
 
 # TODO install dotfiles from github thing
