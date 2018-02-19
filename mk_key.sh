@@ -1,13 +1,30 @@
 #!/bin/bash
 
+# get current user so we can explicitly run commands that don't require
+# root privileges as that user
+if [ $SUDO_USER ]; then
+    USER=$SUDO_USER
+else
+    USER=`whoami`
+fi
+
 # TODO check for existing keys first
 # put email in envvar in movein? used elsewhere?
 DEFAULT_EMAIL="toconnel@caltech.edu"
+
 read -p "Email (default $DEFAULT_EMAIL)" email
 email=${email:-$DEFAULT_EMAIL}
-ssh-keygen -t rsa -b 4096 -C \"$email\"
-eval "$(ssh-agent -s)"
-ssh-add $HOME/.ssh/id_rsa
-sudo apt-get install xclip
-xclip -sel clip < $HOME/.ssh/id_rsa.pub
-echo "SSH public key copied to your clipboard. Paste into box under https://github.com/settings/keys"
+sudo -u $USER ssh-keygen -t rsa -b 4096 -C \"$email\"
+sudo -u eval "$(ssh-agent -s)"
+sudo -u ssh-add $HOME/.ssh/id_rsa
+
+apt-get install xclip
+sudo -u xclip -sel clip < $HOME/.ssh/id_rsa.pub
+
+cat <<EOF
+SSH public key copied to your clipboard. Paste into the box under 
+https://github.com/settings/keys.
+
+If it is not on your clipboard, type:
+xclip -sel clip < ~/.ssh/id_rsa.pub
+EOF

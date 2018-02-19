@@ -1,5 +1,7 @@
 #!/bin/bash
 
+SCRIPTPATH="$( cd "$(dirname "$0")" ; pwd -P )"
+
 # get current user so we can explicitly run commands that don't require
 # root privileges as that user
 if [ $SUDO_USER ]; then
@@ -14,7 +16,7 @@ fi
 #add apt-repository -y ppa:eugenesan/ppa
 apt update
 # vim-gtk was compiled with system clipboard support, unlike vim-nox
-apt install -y vim-gtk git
+apt install -y vim-gtk git xclip
 
 # TODO maybe install conda instead?
 # https://www.digitalocean.com/community/tutorials/
@@ -57,3 +59,6 @@ sudo -u $USER mkdir -p ~/catkin/src
 
 sudo -u $USER git config --global user.name "Tom O'Connell"
 sudo -u $USER git config --global user.email "toconnel@caltech.edu"
+
+# TODO get path to this script first? (to not use relative)
+${SCRIPTPATH}/mk_key.sh
