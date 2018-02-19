@@ -61,4 +61,9 @@ sudo -u $USER git config --global user.name "Tom O'Connell"
 sudo -u $USER git config --global user.email "toconnel@caltech.edu"
 
 # TODO get path to this script first? (to not use relative)
-${SCRIPTPATH}/mk_key.sh
+if [ ! -e ~/.ssh/id_rsa.pub ]; then
+    ${SCRIPTPATH}/mk_key.sh
+else
+    echo "SSH key found. Not generating for Github. See ~/src/scripts/mk_key.sh"
+fi
+
