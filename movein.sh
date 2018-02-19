@@ -15,6 +15,12 @@ fi
 apt update
 # vim-gtk was compiled with system clipboard support, unlike vim-nox
 apt install -y vim-gtk git
+
+# TODO maybe install conda instead?
+# https://www.digitalocean.com/community/tutorials/
+# how-to-install-the-anaconda-python-distribution-on-ubuntu-16-04
+apt install -y python-pip python3-pip
+
 #apt install -y keepassx
 
 # TODO install dotfiles from github thing
@@ -35,7 +41,7 @@ sudo -u $USER cp /usr/share/applications/ubuntu-amazon-default.desktop \
     ~/.local/share/applications/ubuntu-amazon-default.desktop
 echo Hidden=true >> ~/.local/share/applications/ubuntu-amazon-default.desktop
 
-sudo -u $USER mkdir ~/src
+sudo -u $USER mkdir -p ~/src
 sudo -u $USER mkdir -p ~/catkin/src
 
 # TODO alt-j / k volume shortcuts
@@ -51,4 +57,3 @@ sudo -u $USER mkdir -p ~/catkin/src
 
 sudo -u $USER git config --global user.name "Tom O'Connell"
 sudo -u $USER git config --global user.email "toconnel@caltech.edu"
-
