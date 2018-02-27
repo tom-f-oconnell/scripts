@@ -10,10 +10,15 @@ fi
 
 KICAD_INSTALL_LOC="/usr/local/bin/kicad"
 if [ ! -e $KICAD_INSTALL_LOC ]; then
-    apt update
+    # will apt update
+    # TODO only run this if missing the shared library
+    ./ngspice.sh
+
     apt install -y libgtk-3-dev python-wxgtk3.0 python-wxtools \
         libwxgtk3.0-dev python-wxgtk3.0 python-wxgtk3.0-dev libglew-dev \
         libglm-dev swig
+    # TODO find appropriate libcurl package for github plugin
+
     # also necessary?: freeglut3, libcairo2-dev, libgtk-3-dev, gstreamer1.0
     # (might not be valid packages, taken from ~/.bash_history)
     # i needed this for some reason
@@ -27,7 +32,7 @@ if [ ! -e $KICAD_INSTALL_LOC ]; then
     cd kicad
 
     sudo -u $USER mkdir -p build/release
-    sudo -u $USER mkdir build/debug
+    sudo -u $USER mkdir -p build/debug
 else
     echo "KiCAD detected. Trying to update."
     # TODO also do some of above steps of those directories don't exist, etc

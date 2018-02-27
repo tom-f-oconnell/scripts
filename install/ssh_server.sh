@@ -1,5 +1,7 @@
 #!/bin/bash
 
-sudo apt update
-sudo apt install openssh-server
-sudo systemctl restart sshd.service
+# TODO getopts flag to suppress update / alternative
+
+apt update
+apt install openssh-server
+systemctl restart sshd.service
