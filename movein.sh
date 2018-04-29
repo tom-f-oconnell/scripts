@@ -21,7 +21,7 @@ apt install -y vim-gtk git xclip
 # TODO maybe install conda instead?
 # https://www.digitalocean.com/community/tutorials/
 # how-to-install-the-anaconda-python-distribution-on-ubuntu-16-04
-apt install -y python-pip python3-pip
+apt install -y python3-pip python3-venv direnv
 
 #apt install -y keepassx
 
@@ -66,4 +66,3 @@ if [ ! -e ~/.ssh/id_rsa.pub ]; then
 else
     echo "SSH key found. Not generating for Github. See ~/src/scripts/mk_key.sh"
 fi
-
