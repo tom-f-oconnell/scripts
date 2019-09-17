@@ -34,11 +34,19 @@ if __name__ == '__main__':
             if auth_type == target_auth_type:
                 target_prefix =  prefix
 
-        if current_auth_type == auth_type:
+        if current_auth_type == target_auth_type:
             break
 
         if current_auth_type == 's':
             url = url.replace(':', '/')
+
+        elif target_auth_type == 's':
+            parts = url.split('/')
+            colon_part = parts[2] + ':' + parts[3]
+            del parts[3]
+            del parts[2]
+            parts.insert(2, colon_part)
+            url = '/'.join(parts)
 
         sys.stdout.write(url.replace(curr_prefix, target_prefix))
         break
