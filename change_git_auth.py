@@ -35,6 +35,7 @@ if __name__ == '__main__':
                 target_prefix =  prefix
 
         if current_auth_type == target_auth_type:
+            sys.stdout.write(url)
             break
 
         if current_auth_type == 's':
