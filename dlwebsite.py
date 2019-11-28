@@ -12,5 +12,6 @@ cmd = ('wget --recursive --no-clobber --page-requisites --html-extension '
     f'--convert-links --restrict-file-names=windows --domains {domain} '
     f'--no-parent {url}'
 )
-sp.Popen(cmd)
+args = cmd.split()
+sp.Popen(args)
 
