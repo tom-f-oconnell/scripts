@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
 
+# TODO what does this currently do if it's already bound somewhere else managed
+# by gsettings? would be good to err / prompt for confirmation in that case,
+# as the GUI for setting shortcuts does.
+
 """
 From a StackOverflow (AskUbuntu) answer by Jacob Vlijm. Some of his 
 instructions in this comment.
 
 Usage:
-python3 /path/to/script.py '<name>' '<command>' '<key_combination>'
+set_keyboard_shortcuts.py '<name>' '<command>' '<key_combination>'
 
 Example:
-python3 /path/to/script.py 'open gedit' 'gedit' '<Alt>7'
+set_keyboard_shortcuts.py 'open gedit' 'gedit' '<Alt>7'
 
 Some special keys:
 Super key:                 <Super>
@@ -28,10 +32,24 @@ Numpad number key(s):      KP_1
 Numpad `-`:                KP_Subtract
 """
 
+import argparse
 import subprocess
-import sys
 import re
 from ast import literal_eval
+
+
+parser = argparse.ArgumentParser()
+parser.add_argument('name', help='A descriptive name for this shortcut.')
+parser.add_argument('command',
+    help='What to run when the shortcut is triggered.'
+)
+parser.add_argument('binding', help='Which key combinations should trigger '
+    'this shortcut.'
+)
+args = parser.parse_args()
+name = args.name
+cmd = args.command
+binding = args.binding
 
 # defining keys & strings to be used
 key = "org.gnome.settings-daemon.plugins.media-keys custom-keybindings"
@@ -40,7 +58,7 @@ item_s = "/" + key.replace(" ", "/").replace(".", "/") + "/"
 firstname = "custom"
 
 # get the current list of custom shortcuts
-get = lambda cmd: subprocess.check_output(["/bin/bash", "-c", cmd]).decode("utf-8")
+get = lambda c: subprocess.check_output(["/bin/bash", "-c", c]).decode("utf-8")
 match = re.search('\[.*\]', get("gsettings get "  +  key))
 current = literal_eval(match.group(0))
 
@@ -57,10 +75,11 @@ while True:
 current.append(new)
 # create the shortcut, set the name, command and shortcut key
 cmd0 = 'gsettings set ' + key + ' "' + str(current) + '"'
-cmd1 = 'gsettings set ' + subkey1 + new + " name '" + sys.argv[1] + "'"
-cmd2 = 'gsettings set ' + subkey1 + new + " command '" + sys.argv[2] + "'"
-cmd3 = 'gsettings set ' + subkey1 + new + " binding '" + sys.argv[3] + "'"
+cmd1 = 'gsettings set ' + subkey1 + new + " name '" + name + "'"
+cmd2 = 'gsettings set ' + subkey1 + new + " command '" + cmd + "'"
+cmd3 = 'gsettings set ' + subkey1 + new + " binding '" + binding + "'"
 
-for cmd in [cmd0, cmd1, cmd2, cmd3]:
-    subprocess.call(["/bin/bash", "-c", cmd])
+for c in [cmd0, cmd1, cmd2, cmd3]:
+    # TODO don't need to split last part too?
+    subprocess.call(["/bin/bash", "-c", c])
 

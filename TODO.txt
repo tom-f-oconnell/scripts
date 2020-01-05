@@ -1,2 +1,6 @@
--maybe move movein stuff to dotfiles install? just call it?
+
+- maybe move movein stuff to dotfiles install? just call it?
+
+- possible to make hotkey that works in browsers, to copy stack overflow links
+  without the slug at the end?
 
