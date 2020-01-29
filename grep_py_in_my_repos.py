@@ -51,7 +51,11 @@ def is_my_repo(d, me="Tom O'Connell"):
     return False
 
 
-def should_be_searched(d, non_git_dirs=False):
+def should_be_searched(d, non_git_dirs=False, hidden_dirs=False):
+    if not hidden_dirs:
+        if basename(normpath(d))[0] == '.':
+            return False
+
     if not is_git_repo(d):
         if non_git_dirs:
             return True
@@ -65,7 +69,11 @@ def main():
     # Same as my alias def. Just here in case I have not yet setup my aliases.
     # Though if we do have the alias def, we will use that version, as it may
     # have been updated.
-    grep_cmd = 'grep -R --exclude-dir=.direnv --include=\*.py'
+    # I've tested it, and grep DOES work with multiple --exclude-dir
+    # definitions.
+    grep_cmd = ('grep -R --exclude-dir=.direnv --exclude-dir=site-packages '
+        '--include=\*.py'
+    )
 
     # Testing for my grepy alias, to use that call if available.
     grepy_alias = 'grepy'
@@ -112,8 +120,16 @@ def main():
     exclude_dirs = [
         basename(normpath(d)) for d in subdirs if not should_be_searched(d)
     ]
+
+    # Initially I tried this syntax, but it seems that w/o doing something else
+    # `Popen` would not work w/ this command format, whether `shell` was True or
+    # not.
     # https://unix.stackexchange.com/questions/282648
-    cmd = grep_cmd + ' --exclude-dir={{{}}}'.format(','.join(exclude_dirs))
+    #cmd = grep_cmd + ' --exclude-dir={{{}}}'.format(','.join(exclude_dirs))
+
+    # On the other hand, this syntax works.
+    cmd = grep_cmd + ''.join([' --exclude-dir=' + d for d in exclude_dirs])
+
     cmd += arg_str
     p = sp.Popen(cmd.split())
 
