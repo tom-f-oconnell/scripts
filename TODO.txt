@@ -4,3 +4,10 @@
 - possible to make hotkey that works in browsers, to copy stack overflow links
   without the slug at the end?
 
+- breakout automatic postmortem implementation (+ modifications to errors) to
+  package (`pymistake`)
+
+  - modify color of ipdb prompt + that initial ipdb prints from default green
+    to maybe a red, to make it immediately obvious whether it was an uncaught
+    error or a manually set ipdb breakpoint
+
