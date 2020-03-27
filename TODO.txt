@@ -11,3 +11,15 @@
     to maybe a red, to make it immediately obvious whether it was an uncaught
     error or a manually set ipdb breakpoint
 
+- wrap below two somehow to make a script to test whether something came
+  preinstalled (for only using preinstalled stuff when i want to be 
+  compatible w/ stock distributions)
+
+  (from: https://askubuntu.com/questions/481 )
+  dpkg -S <file>
+  (-> package)
+
+  (from: https://askubuntu.com/questions/1192110 )
+  apt autoremove <package> --simulate | grep ubuntu-desktop
+  (may just need to test if output is empty)
+
