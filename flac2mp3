@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # from answer on SO by Braiam
 # https://askubuntu.com/questions/385636/what-is-the-proper-way-to-convert-flac-files-to-320-kbit-sec-mp3

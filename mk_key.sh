@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # get current user so we can explicitly run commands that don't require
 # root privileges as that user

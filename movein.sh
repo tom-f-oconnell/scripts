@@ -1,4 +1,8 @@
-#!/bin/bash
+#!/usr/bin/env bash
+
+# TODO TODO eventually, probably refactor this to dotfiles?
+# (though a few dependencies do seem to be in here)
+# maybe merge the two?
 
 SCRIPTPATH="$( cd "$(dirname "$0")" ; pwd -P )"
 
@@ -15,6 +19,12 @@ fi
 # TODO put some stuff behind option for my personal vs work computers?
 #add apt-repository -y ppa:eugenesan/ppa
 apt update
+
+# TODO maybe install dbus-x11 to get vim-gtk to work w/ wsl?
+# https://vi.stackexchange.com/questions/20107
+# (or is that literally just for the GUI version that maybe also comes w/ that
+# package?)
+
 # vim-gtk was compiled with system clipboard support, unlike vim-nox
 apt install -y vim-gtk git xclip
 
@@ -25,7 +35,8 @@ apt install -y python3-pip python3-venv direnv
 
 #apt install -y keepassx
 
-# TODO install dotfiles from github thing
+# TODO install dotfiles from github thing (if not going to always do the install
+# from the other direction...)
 # TODO install conda in a way that won't conflict with ROS?
 
 # missing:
@@ -36,17 +47,14 @@ apt install -y python3-pip python3-venv direnv
 # TODO redshift?
 # vlc?
 
-# make Amazon application icon hidden in dashboard search
-# can't install package that contains it (unity-webapps-common)
-# because it has other important stuff
-sudo -u $USER cp /usr/share/applications/ubuntu-amazon-default.desktop \
-    ~/.local/share/applications/ubuntu-amazon-default.desktop
-echo Hidden=true >> ~/.local/share/applications/ubuntu-amazon-default.desktop
-
 sudo -u $USER mkdir -p ~/src
-sudo -u $USER mkdir -p ~/catkin/src
 
-# TODO alt-j / k volume shortcuts
+# No need to make this catkin dir on WSL, as no plans to develop ROS there.
+# https://stackoverflow.com/questions/38859145
+if ! grep -q Microsoft /proc/version; then
+    sudo -u $USER mkdir -p ~/catkin/src
+fi
+
 # TODO install mendeley?
 # TODO same shortcuts in mendeley
 # TODO install firefox w/ settings (vim keybinds, etc)
@@ -57,12 +65,10 @@ sudo -u $USER mkdir -p ~/catkin/src
 # :bind h tableft -1
 # :bind l tableft
 
-sudo -u $USER git config --global user.name "Tom O'Connell"
-sudo -u $USER git config --global user.email "toconnel@caltech.edu"
-
 # TODO get path to this script first? (to not use relative)
 if [ ! -e ~/.ssh/id_rsa.pub ]; then
     ${SCRIPTPATH}/mk_key.sh
 else
     echo "SSH key found. Not generating for Github. See ~/src/scripts/mk_key.sh"
 fi
+
