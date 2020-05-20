@@ -23,3 +23,5 @@
   apt autoremove <package> --simulate | grep ubuntu-desktop
   (may just need to test if output is empty)
 
+- install deps in requirements.txt w/ appropriate system python(s)
+
