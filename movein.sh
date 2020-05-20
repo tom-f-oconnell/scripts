@@ -72,3 +72,5 @@ else
     echo "SSH key found. Not generating for Github. See ~/src/scripts/mk_key.sh"
 fi
 
+sudo snap install hub --classic
+
