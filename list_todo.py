@@ -1,24 +1,36 @@
 #!/usr/bin/env python
 
-""" List TODOs"""
+"""
+List TODOs
+
+This script was provided by my friend Brian Timar.
+"""
 import argparse
 
-priorities = {1 : "Worth doing if you have the time", 
-              2 : "Pretty urgent, but it still works", 
-              3 : "Might brick your machine", 
-              4 : "National security"}
+priorities = {
+    1: "Worth doing if you have the time", 
+    2: "Pretty urgent, but it still works", 
+    3: "Might brick your machine", 
+    4: "National security"
+}
 
-#### salt to taste
-priorities_profane = {1 : "Kinda important", 
-                    2 : "Shitty but it still works", 
-                    3 : "jesus man just fix this", 
-                    4 : "fucking fuck"}
+# salt to taste
+priorities_profane = {
+    1: "Kinda important", 
+    2: "Shitty but it still works", 
+    3: "jesus man just fix this", 
+    4: "fucking fuck"
+}
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="List TODOs in the given file")
     parser.add_argument("filename", type=str, help="Source file to read.")
-    parser.add_argument("-profane", action="store_true", help="Use profanity in summaries.")
-    parser.add_argument("-windowsize", type=int, default=5, help="Number of lines per window.")
+    parser.add_argument("-profane", action="store_true",
+        help="Use profanity in summaries."
+    )
+    parser.add_argument("-windowsize", type=int, default=5,
+        help="Number of lines per window."
+    )
     args = parser.parse_args()
     source = args.filename
 
@@ -40,8 +52,7 @@ if __name__ == "__main__":
         windows_by_priority[window_priority].append(w)
         window = []
 
-
-    print(f"Todo's in {source}:\n" + "="*30)
+    print(f"Todo's in {source}:\n" + "=" * 30)
     tasks = [list() for _ in range(len(priorities))]
     windowct = 0
 
@@ -61,6 +72,8 @@ if __name__ == "__main__":
                     window_priority = max(priorities.keys())
                 startline = linenum + 1
                 window.append(ln) 
+
     for priority in reversed(sorted(windows_by_priority.keys())):
         for window in windows_by_priority[priority]:
             print(window)
+
