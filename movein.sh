@@ -67,10 +67,31 @@ fi
 
 # TODO get path to this script first? (to not use relative)
 if [ ! -e ~/.ssh/id_rsa.pub ]; then
+    # This script must be run as "sudo" (which all calls in this script are
+    # by default), though it currently doesn't check that itself.
     ${SCRIPTPATH}/mk_key.sh
 else
     echo "SSH key found. Not generating for Github. See ~/src/scripts/mk_key.sh"
 fi
 
-sudo snap install hub --classic
+# TODO need something like a -y flag here?
+snap install hub --classic
+
+# (seems to move them to incorrect places, AT LEAST if run when the
+# windows are already open, though it doesn't seem to open new windows,
+# which is nice. might not work at all w/ like multiple firefox after
+# closing...)
+# TODO try the python script from the same SO post though:
+# https://askubuntu.com/questions/193569
+# TODO maybe add some hacks that read window names to distinguish firefox
+# windows? or firefox specific hacks loading some data firefox uses
+# (maybe even reading some of firefox's memory in the extreme)?
+
+# TODO delete if this thing i install w/ npm doesn't end up being useful
+#apt install -y npm
+# This does also need to be sudo (as all things in this script are by default)
+# TODO note the deprecation warning on uuid dep i got when installing this.
+# may matter...
+#npm install -g linux-window-session-manager
+#
 
