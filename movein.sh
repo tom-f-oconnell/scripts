@@ -95,3 +95,6 @@ snap install hub --classic
 #npm install -g linux-window-session-manager
 #
 
+# TODO install virtualbox for vagrant
+# TODO automate vagrant install? it seems it might be best to download installer
+# from their website...
