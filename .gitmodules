@@ -1,0 +1,3 @@
+[submodule "GithubCloner"]
+	path = GithubCloner
+	url = git@github.com:mazen160/GithubCloner
