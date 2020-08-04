@@ -22,7 +22,11 @@ from datetime import timedelta
 kb_per_mb = 1024
 
 def dir_size_kb(d):
-    return int(check_output(f'du -s {d}'.split()).decode().split()[0])
+    # Without the --apparent-size option, the sizes reported also depend on how
+    # they are stored in the underlying filesystem. For comparing sizes across
+    # machines (and thus likely different filesystems), this is what we want.
+    return int(check_output(f'du -s --apparent-size {d}'.split()).decode(
+        ).split()[0])
 
 def monitor_dir_growth(monitor_dir, interval_s, count=None, total_kb=None):
     if not os.path.exists(monitor_dir):
