@@ -16,9 +16,19 @@ from os.path import isfile, expanduser, normpath, basename
 import subprocess as sp
 
 
+# TODO fix bug (just suppress output?) where this was printed:
+# 'grep: github_organizations/other_flyneuro/VirtualFlyBrain/VFB_owl/src/code/\
+# unit_tests/.#query_tests.py: No such file or directory' when running
+# `grepym "import chemutils"` from ~/src
+
+DEBUG = False
+
 def is_git_repo(d):
     """True if `d` is a Git repo, False otherwise.
     """
+    if DEBUG:
+        print(d, 'is_git_repo?', end=' ', flush=True)
+
     # Could also use one of the git Python packges, but prefering not to
     # in my util scripts, for portability.
     # Note that this would also probably fail if git were not installed...
@@ -28,43 +38,100 @@ def is_git_repo(d):
     p.wait()
     #print(p.returncode)
     # Negation since shell exit codes are 0 if successful..
-    return not bool(p.returncode)
+
+    _is_git_repo = not bool(p.returncode)
+    if DEBUG:
+        print(_is_git_repo, flush=True)
+    return _is_git_repo
 
 
-def is_my_repo(d, me="Tom O'Connell"):
+def is_repo_empty(d):
+    """Takes a dir known to be a git repo and returns whether it has no commits.
+
+    (the alternative being that it is an empty repo)
+    """
+    if DEBUG:
+        print(d, 'is_repo_empty?', end=' ', flush=True)
+
+    p = sp.Popen('git rev-parse HEAD'.split(), cwd=d, stdout=sp.DEVNULL,
+        stderr=sp.DEVNULL
+    )
+    # Popen.wait() sets *and* returns returncode
+    returncode = p.wait()
+
+    ret = bool(returncode)
+    if DEBUG:
+        print(ret, flush=True)
+    return ret
+
+
+# TODO maybe refactor a bit to shortcircuit all the repo checks if (for example)
+# called from within one repo. don't need to check subdirectories really then...
+# TODO at the same time as above refactoring, may want to also handle
+# submodules, to exclude things such as the 3rd party (e.g. vim extensions) in
+# my dotbot repo, which i would prefer not to search with this command
+
+def is_my_repo(d, me="Tom O'Connell", include_empty_repos=True):
     """Takes a dir known to be a git repo and returns whether I've committed.
     """
-    try:
-        # The only lines that don't start with whitespace seem to begin
-        # with commit author names, so I'm checking if any lines begin
-        # with my name.
-        out = sp.check_output('git shortlog | grep "^{}"'.format(me), cwd=d,
-            shell=True
-        )
-        assert len(out) > 0
-        return True
 
-    except sp.CalledProcessError as e:
-        # If grep didn't match anything, this should be the returncode.
-        # This is the only error expected (though others may also throw
-        # this returncode, I suppose).
-        assert e.returncode == 1
+    ret = None
+    # Need to check this because attempts to run the `git shortlog` command
+    # (below) on empty repos will read from stdin, hanging. It prints:
+    # '(reading log message from standard input)' when this happens.
+    if is_repo_empty(d):
+        ret = include_empty_repos
 
-    return False
+    out = None
+    if ret is None:
+        try:
+            # The only lines that don't start with whitespace seem to begin
+            # with commit author names, so I'm checking if any lines begin
+            # with my name.
+            out = sp.check_output('git shortlog | grep "^{}"'.format(me), cwd=d,
+                shell=True
+            )
+            # TODO maybe also assert `me` is 'in' out? (though bytes not str)
+            assert len(out) > 0
+            ret = True
+
+        except sp.CalledProcessError as e:
+            # If grep didn't match anything, this should be the returncode.
+            # This is the only error expected (though others may also throw
+            # this returncode, I suppose).
+            assert e.returncode == 1
+            ret = False
+
+    if DEBUG:
+        # printing all down here so debug prints within is_repo_empty don't
+        # happen in the middle
+        print(d, 'is_my_repo?', ret, flush=True)
+
+    return ret
 
 
-def should_be_searched(d, non_git_dirs=False, hidden_dirs=False):
+def should_be_searched(d, non_git_dirs=False, hidden_dirs=False,
+    include_empty_repos=True):
+
     if not hidden_dirs:
         if basename(normpath(d))[0] == '.':
-            return False
+            ret = False
 
     if not is_git_repo(d):
         if non_git_dirs:
-            return True
+            ret = True
         else:
-            return False
+            ret = False
 
-    return is_my_repo(d)
+    ret = is_my_repo(d)
+
+    if DEBUG:
+        # printing all down here so debug prints within calls above don't happen
+        # in the middle
+        print(d, 'should_be_searched?', ret, flush=True)
+        print('', flush=True)
+
+    return ret
 
 
 def main():
@@ -98,7 +165,18 @@ def main():
             assert len(matching_lines) == 1, \
                 'redefinition of {} alias'.format(grepy_alias)
             line = matching_lines[0]
+
+            if DEBUG:
+                print('redefining base grep_cmd from ~/.bash_aliases')
+                print('old hardcoded grep_cmd:')
+                print(grep_cmd)
+
             grep_cmd = line[len(prefix):-1]
+
+            if DEBUG:
+                print('new grep_cmd:')
+                print(grep_cmd)
+                print()
 
     # No need to escape the asterisk, since not calling inside a shell that
     # would treat that specially. Leaving the slash breaks matching.
@@ -114,7 +192,6 @@ def main():
     # Behavior in no-extra-args case is to show greps error message about lack
     # of pattern arg.
     args = sys.argv[1:]
-    arg_str = ' ' + ' '.join(args)
 
     # Using negation since it seems grep might more easily support
     # excluding dirs than including them, and doing this is only one
@@ -132,8 +209,24 @@ def main():
     # On the other hand, this syntax works.
     cmd = grep_cmd + ''.join([' --exclude-dir=' + d for d in exclude_dirs])
 
-    cmd += arg_str
-    p = sp.Popen(cmd.split())
+    list_cmd = cmd.split()
+    arg_str = ' '.join(args)
+    list_cmd.append(arg_str)
+
+    if DEBUG:
+        print('args:')
+        print(args)
+        print('arg_str:')
+        print(arg_str)
+        print('cmd:')
+        print(cmd)
+        print('cmd.split():')
+        print(cmd.split())
+
+        print('list_cmd:')
+        print(list_cmd)
+
+    p = sp.Popen(list_cmd)
 
     # Without this wait, the next prompt is printed before the output of the
     # Popen call finishes.
