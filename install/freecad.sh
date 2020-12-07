@@ -20,8 +20,8 @@ apt build-dep -y freecad-daily
 apt install -y freecad-daily
 
 cd ~/src
-sudo -u $USER git clone git://github.com/FreeCAD/FreeCAD freecad
-cd freecad
+sudo -u $USER git clone git://github.com/FreeCAD/FreeCAD
+cd FreeCAD
 
 sudo -u $USER mkdir build
 cd build
@@ -47,5 +47,13 @@ sudo apt install -y python3-pybind11
 sudo -u $USER cmake .. -DBUILD_QT5=ON -DPYTHON_EXECUTABLE=/usr/bin/python3
 
 sudo -u $USER make -j$(nproc --ignore=2)
-# why was this commented?
+# why was this commented? i guess it doesn't seem to actually put the main
+# executable on the path, but it does install other stuff...
 make install
+
+# TODO maybe either setup *.desktop files, starting with that from
+# FreeCAD/src/XDGData (.svg icon also there), adding absolute paths to
+# executable / icon (or maybe just using those and adding build/bin to PATH?)
+# (for now, can just drag the .desktop file i manually modified and added to
+# this repo to the launcher bar. assumes particular paths.)
+

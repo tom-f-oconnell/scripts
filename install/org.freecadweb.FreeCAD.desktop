@@ -1,0 +1,23 @@
+[Desktop Entry]
+Name=FreeCAD
+Name[de]=FreeCAD
+Name[pl]=FreeCAD
+Name[ru]=FreeCAD
+Comment=Feature based Parametric Modeler
+Comment[de]=Feature-basierter parametrischer Modellierer
+Comment[ru]=Система автоматизированного проектирования
+GenericName=CAD Application
+GenericName[de]=CAD-Anwendung
+GenericName[pl]=Aplikacja CAD
+GenericName[ru]=Система автоматизированного проектирования
+Exec=/home/tom/src/FreeCAD/build/bin/FreeCAD %F
+#Exec=FreeCAD %F
+Terminal=false
+Type=Application
+# I found I did need to add the .svg extension, even though the .desktop file
+# this was derived from did not have it.
+Icon=/home/tom/src/FreeCAD/src/XDGData/org.freecadweb.FreeCAD.svg
+#Icon=org.freecadweb.FreeCAD
+Categories=Graphics;Science;Education;Engineering;
+StartupNotify=true
+MimeType=application/x-extension-fcstd;
