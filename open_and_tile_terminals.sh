@@ -29,6 +29,12 @@ TERM_TO_RESIZE_SLEEP_S=0.05
 # TODO TODO TODO detect whether we have two monitors and use the two monitors
 # rather than multiple workspaces in `-n 4` case!!
 
+# TODO accept filename too (splitting it to get dir to actually use as working
+# directory), but opening the file in vim in a specific one of the 2/4
+# terminals? (maybe bottom[/current monitor] left?)
+# TODO + maybe `ls` in the terminal opposite this one? or the rightmost terminal
+# in both workspaces/monitors if opening 4?
+
 # TODO maybe add argument to specify an ssh command (could prompt as i do for
 # path?), and then run that in all opened terminals? or an arbitrary command,
 # and wrap that for ssh case? for ssh specifically, might need to consider order
@@ -52,7 +58,7 @@ while getopts ":pn:" o; do
             opt_prompt_for_path='true'
             ;;
         n)
-            opt_n=${o}
+            opt_n=${OPTARG}
             ((opt_n == 2 || opt_n == 4)) || usage
             ;;
         *)
@@ -136,6 +142,16 @@ if ${opt_prompt_for_path}; then
     #exit
 else
     wd="$HOME"
+    # TODO TODO try to change how xdotool is called to avoid need for this, if
+    # possible. it seems that if user is still holding some some of the
+    # modifiers used to invoke the command in this path (e.g. Ctrl + Shift + 2),
+    # then the resize commands don't go through correctly. and this is more
+    # likely to be an issue when the user doesn't have to subsequently enter a
+    # path. could maybe use keyup commands like here:
+    # https://unix.stackexchange.com/questions/60007
+    # but maybe it could cause more problems than it fixes?
+    NOPROMPT_SLEEP_S=0.7
+    sleep ${NOPROMPT_SLEEP_S}
 fi
 # Initially I thought I might want to find most recently active terminal and use
 # the working directory of it (really the bash[/other shell] process inside of
@@ -160,7 +176,16 @@ function open_and_tile_lr_terminals() {
     sleep ${TERM_TO_RESIZE_SLEEP_S}
     xdotool key Ctrl+Super+Left
 
-    gnome-terminal --working-directory=${wd}
+    # TODO does initiating bash this way cause it to have a different
+    # environment than in the invocation above? if so (and not easily fixeable),
+    # probably not worth that just to show `ls` output...
+    # TODO figure out how to get this to actually print color? the `ls --color`
+    # output is colored appropriately, but the printf output isn't. printf
+    # doesn't have a --color option.
+    printf "${LIGHT_GREEN}${USER}@$(hostname)${END_COLOR}:"
+    gnome-terminal --working-directory=${wd} -- bash -c \
+        "printf \"\n${LIGHT_BLUE}${wd}${END_COLOR}$ ls\n\"; ls --color; echo ''; exec bash"
+
     sleep ${TERM_TO_RESIZE_SLEEP_S}
     xdotool key Ctrl+Super+Right
 }
@@ -172,14 +197,14 @@ function open_and_tile_lr_terminals() {
 if [ ${opt_n} -eq 4 ]; then
     # To ensure that we are in the top workspace row (assuming 2 rows, as by
     # default and in my setup), so that subsequent move down is valid.
-    xdotool Ctrl+Alt+Up
+    xdotool key Ctrl+Alt+Up
     sleep ${WORKSPACE_SWITCH_TO_TERM_SLEEP_S}
 fi
 
 open_and_tile_lr_terminals
 
 if [ ${opt_n} -eq 4 ]; then
-    xdotool Ctrl+Alt+Down
+    xdotool key Ctrl+Alt+Down
     sleep ${WORKSPACE_SWITCH_TO_TERM_SLEEP_S}
 
     open_and_tile_lr_terminals
