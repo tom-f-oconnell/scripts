@@ -19,6 +19,8 @@ apt build-dep -y freecad-daily
 # is called "freecad-daily", so it shouldn't really conflict.
 apt install -y freecad-daily
 
+# TODO add some convenience fn / util to clone or cd-to-and-pull (if can w/o
+# intervention), and use that here
 cd ~/src
 sudo -u $USER git clone git://github.com/FreeCAD/FreeCAD
 cd FreeCAD
