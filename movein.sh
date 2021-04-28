@@ -17,16 +17,47 @@ fi
 
 # for keepassx
 # TODO put some stuff behind option for my personal vs work computers?
-#add apt-repository -y ppa:eugenesan/ppa
+# TODO maybe consider replacing w/ ubuntuhandbook1/keepass2 (if compatible /
+# migration available), or see if other ppas are more active / more recommended
+#add-apt-repository -y ppa:eugenesan/ppa
+
+# TODO TODO add deadsnakes ppa and install python3.8 + the corresponding venv
+# and tk packages
+# TODO TODO add ppa for unity [unity7 (suffix/prefix?) was it?] + install
+
+# TODO TODO did i end up getting latest git from a ppa (to get version
+# sufficient for 3rd party filter-repo)? if so, add that
+
+# not compiled w/ python supported needed for python YCM to work it seems
+#add-apt-repository -y ppa:jonathonf/vim
+
 apt update
+
+# TODO install xdotool / wmctrl stuff
 
 # TODO maybe install dbus-x11 to get vim-gtk to work w/ wsl?
 # https://vi.stackexchange.com/questions/20107
 # (or is that literally just for the GUI version that maybe also comes w/ that
 # package?)
 
-# vim-gtk was compiled with system clipboard support, unlike vim-nox
-apt install -y vim-gtk git xclip
+# TODO check whether the vim from this is also compiled w/ clipboard support.
+# the `vim-gtk` i used previously was.
+# TODO TODO maybe also install vim-youtcompleteme (+ ycmd ?) from the same vim
+# ppa, rather than building them from source as my
+# dotfiles/install_vim_extensions.sh attempted to (and may or may not still
+# successfully) do
+# NOTE: unfortunately this vim doesn't seem to be compiled w/ the python3.6+
+# support seemingly necessary for YCM to work correctly (w/ python at least?).
+# I get: `YouCompleteMe unavailable: invalid syntax (vimsupport.py, line 184)`
+# But I was only using this ppa to try to get YCM to work, cause now it needs
+# VIM >=8.2.something, so my options seem to be either compiling VIM myself,
+# finding another ppa, or manually checking out (maybe just via forking, and
+# then just changing Vundle to point to my github account?) an
+# older version of YCM and using that one.
+#apt install -y vim vim-youcompleteme
+apt install -y vim-gtk
+
+apt install -y git xclip
 
 # TODO maybe install conda instead?
 # https://www.digitalocean.com/community/tutorials/
