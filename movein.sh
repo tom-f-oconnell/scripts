@@ -1,5 +1,11 @@
 #!/usr/bin/env bash
 
+# NOTE: to find out if a package is installed in a fresh version of an Ubuntu release,
+# you can check the appropriate *.manifest file from the download page for the
+# particular release. For example, for 18.04.5 desktop:
+# http://releases.ubuntu.com/bionic/ubuntu-18.04.5-desktop-amd64.manifest
+# Got this tip from: https://askubuntu.com/questions/48886
+
 # TODO TODO eventually, probably refactor this to dotfiles?
 # (though a few dependencies do seem to be in here)
 # maybe merge the two?
@@ -21,9 +27,12 @@ fi
 # migration available), or see if other ppas are more active / more recommended
 #add-apt-repository -y ppa:eugenesan/ppa
 
-# TODO TODO add deadsnakes ppa and install python3.8 + the corresponding venv
-# and tk packages
-# TODO TODO add ppa for unity [unity7 (suffix/prefix?) was it?] + install
+add-apt-repository -y ppa:deadsnakes/ppa
+
+# TODO add ppa for unity [unity7 (suffix/prefix?) was it?] + install
+# (i'm not sure why i thought this was from a ppa. i just installed it via:
+# `sudo apt install ubuntu-unity-desktop` this time, in fresh 18.04.
+# was there something else i got from a ppa like this?)
 
 # TODO TODO did i end up getting latest git from a ppa (to get version
 # sufficient for 3rd party filter-repo)? if so, add that
@@ -32,8 +41,6 @@ fi
 #add-apt-repository -y ppa:jonathonf/vim
 
 apt update
-
-# TODO install xdotool / wmctrl stuff
 
 # TODO maybe install dbus-x11 to get vim-gtk to work w/ wsl?
 # https://vi.stackexchange.com/questions/20107
@@ -57,12 +64,33 @@ apt update
 #apt install -y vim vim-youcompleteme
 apt install -y vim-gtk
 
-apt install -y git xclip
+# TODO install wmctrl?
+
+# TODO `direnv allow` on home directory? (maybe in dotbot stuff, if it needs to copy /
+# link some files there first?)
+
+apt install -y curl git xclip gparted nfs-common xdotool direnv chrony smartmontools
+apt install -y tree autofs
+
+# Mainly just for `aptitude why <x>` (says which package triggered installation via
+# dependency / whether package was manually installed, though the former doesn't
+# recurse to the manually installed packages [/ seem to have options to]).
+apt install -y aptitude
+
+# TODO maybe warn about / don't install the ssh server by default?
+# (or configure to disable it?)
+apt install -y openssh-server
 
 # TODO maybe install conda instead?
 # https://www.digitalocean.com/community/tutorials/
 # how-to-install-the-anaconda-python-distribution-on-ubuntu-16-04
-apt install -y python3-pip python3-venv direnv
+apt install -y python3-pip python3-venv
+
+# All from deadsnakes PPA
+apt install -y python3.8 python3.8-dev python3.8-venv python3.8-tk
+
+# TODO install black python formatter (snap seemed to be best / only option for
+# 16.04, but is that also the case for 18.04+?)
 
 #apt install -y keepassx
 
@@ -96,6 +124,9 @@ fi
 # :bind h tableft -1
 # :bind l tableft
 
+# TODO TODO update to new name github has in their instructions (the ecdsa or
+# whatever algorithm rather than rsa) (+ probably refactor check for the key into
+# mk_key.sh)
 # TODO get path to this script first? (to not use relative)
 if [ ! -e ~/.ssh/id_rsa.pub ]; then
     # This script must be run as "sudo" (which all calls in this script are
