@@ -93,6 +93,12 @@ apt install -y python3-pip python3-venv
 # All from deadsnakes PPA
 apt install -y python3.8 python3.8-dev python3.8-venv python3.8-tk
 
+apt install -y tmux smartmontools iotop htop
+
+# TODO remove if this is installed in stock ubuntu >=18.04 by default.
+# For https://github.com/cykerway/complete-alias
+apt install -y bash-completion
+
 # TODO install black python formatter (snap seemed to be best / only option for
 # 16.04, but is that also the case for 18.04+?)
 
@@ -118,10 +124,8 @@ if ! grep -q Microsoft /proc/version; then
     sudo -u $USER mkdir -p ~/catkin/src
 fi
 
-# TODO install mendeley?
-# TODO same shortcuts in mendeley
 # TODO install firefox w/ settings (vim keybinds, etc)
-# TODO how to configure tridactyl 
+# TODO how to configure tridactyl
 # (only that works for newest firefox as of late 2017)
 # to have ":bind i tabclose"?
 # also:
