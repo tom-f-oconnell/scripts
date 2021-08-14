@@ -4,3 +4,4 @@ I have my `~/.bashrc` configured to add this repo (which I install under
 just by typing their names. Any git submodules in this repo will also have their
 root directories added to the `PATH`.
 
+See also my [dotfiles repo](https://github.com/tom-f-oconnell/dotfiles)
