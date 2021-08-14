@@ -29,10 +29,11 @@ fi
 
 add-apt-repository -y ppa:deadsnakes/ppa
 
-# TODO add ppa for unity [unity7 (suffix/prefix?) was it?] + install
+# TODO TODO add ppa for unity [unity7 (suffix/prefix?) was it?] + install
 # (i'm not sure why i thought this was from a ppa. i just installed it via:
 # `sudo apt install ubuntu-unity-desktop` this time, in fresh 18.04.
 # was there something else i got from a ppa like this?)
+# keep indicator-multiload with unity cause it won't work with default gnome.
 
 # TODO TODO did i end up getting latest git from a ppa (to get version
 # sufficient for 3rd party filter-repo)? if so, add that
@@ -46,6 +47,9 @@ apt update
 # https://vi.stackexchange.com/questions/20107
 # (or is that literally just for the GUI version that maybe also comes w/ that
 # package?)
+
+# NOTE: indicator-multiload will only work with unity, not the default gnome in >=18.04
+apt install -y indicator-multiload
 
 # TODO check whether the vim from this is also compiled w/ clipboard support.
 # the `vim-gtk` i used previously was.
@@ -136,8 +140,17 @@ else
     echo "SSH key found. Not generating for Github. See ~/src/scripts/mk_key.sh"
 fi
 
+# TODO install inkscape via snap (from default channel)
+
 # TODO need something like a -y flag here?
 snap install hub --classic
+
+# not sure whether maven already include something that would make default-jdk
+# irrelevant
+# for https://github.com/hoijui/ReZipDoc
+# TODO automate rest of setup of ReZipDoc (if it works for me...)
+# (just trying their non-dev-install for now)
+#apt install maven default-jdk
 
 # (seems to move them to incorrect places, AT LEAST if run when the
 # windows are already open, though it doesn't seem to open new windows,
