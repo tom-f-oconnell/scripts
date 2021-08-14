@@ -85,13 +85,16 @@ apt install -y aptitude
 # (or configure to disable it?)
 apt install -y openssh-server
 
-# TODO maybe install conda instead?
-# https://www.digitalocean.com/community/tutorials/
-# how-to-install-the-anaconda-python-distribution-on-ubuntu-16-04
 apt install -y python3-pip python3-venv
 
 # All from deadsnakes PPA
 apt install -y python3.8 python3.8-dev python3.8-venv python3.8-tk
+
+# TODO TODO at least install conda behind prompt (maybe in separate script that gets
+# called here, but skipped if non-interactive, and include instructions on how to
+# use that script separately in README)
+# TODO add automation/instructions for installing mamba (via conda) after
+# https://mamba.readthedocs.io/en/latest/installation.html
 
 apt install -y tmux smartmontools iotop htop
 
