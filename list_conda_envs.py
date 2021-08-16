@@ -12,14 +12,14 @@ complete -o nosort -C list_conda_envs.py cls
 """
 
 import sys
-from subprocess import run
+from subprocess import check_output
 import json
 from os.path import split
 
 
 def list_conda_envs():
-    p = run(['conda', 'env', 'list', '--json', '--quiet'], capture_output=True)
-    data = json.loads(p.stdout.decode())
+    out = check_output(['conda', 'env', 'list', '--json', '--quiet'])
+    data = json.loads(out.decode())
     envs = data['envs']
     # In the two installs I've checked so far, the first element in this seems to just
     # be the path to the conda install root (and is the prefix of all the remaining
