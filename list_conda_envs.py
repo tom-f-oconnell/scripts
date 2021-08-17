@@ -23,8 +23,10 @@ def list_conda_envs():
     envs = data['envs']
     # In the two installs I've checked so far, the first element in this seems to just
     # be the path to the conda install root (and is the prefix of all the remaining
-    # ones)
-    return [split(env_name)[1] for env_name in envs[1:]]
+    # ones).
+    # This actually corresponds to the 'base' environment though, so unless that changes
+    # I think it's fine to just hardcode that in here.
+    return ['base'] + [split(env_name)[1] for env_name in envs[1:]]
 
 
 def main():
