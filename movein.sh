@@ -73,7 +73,7 @@ apt install -y vim-gtk
 # TODO `direnv allow` on home directory? (maybe in dotbot stuff, if it needs to copy /
 # link some files there first?)
 
-apt install -y curl git xclip gparted nfs-common xdotool direnv chrony smartmontools
+apt install -y curl git xclip gparted nfs-common xdotool wmctrl direnv chrony
 apt install -y tree autofs
 
 # Mainly just for `aptitude why <x>` (says which package triggered installation via
