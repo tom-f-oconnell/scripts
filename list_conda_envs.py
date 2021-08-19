@@ -11,10 +11,11 @@ complete -o nosort -C list_conda_envs.py cls
 ```
 """
 
-import sys
 from subprocess import check_output
 import json
 from os.path import split
+
+from bash_completion import list_or_complete
 
 
 def list_conda_envs():
@@ -30,27 +31,8 @@ def list_conda_envs():
 
 
 def main():
-    envs = list_conda_envs()
-
-    # Case where this script is explicitly called as `list_conda_envs.py`
-    if len(sys.argv) == 1:
-        for env_name in envs:
-            print(env_name)
-
-    elif len(sys.argv) == 4:
-        # When used as completion script, there should be 4 elements in sys.argv:
-        # script name, command being completed, partial word being typed, previous word
-        being_typed = sys.argv[2]
-        for env_name in envs:
-            if env_name.startswith(being_typed):
-                print(env_name)
-            else:
-                continue
-
-    else:
-        raise ValueError('expected length 1 or 4 sys.argv (manual / completion-script '
-            'usage, respectively)'
-        )
+    env_names = list_conda_envs()
+    list_or_complete(env_names)
 
 
 if __name__ == '__main__':
