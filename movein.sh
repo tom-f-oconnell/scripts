@@ -29,6 +29,8 @@ fi
 
 add-apt-repository -y ppa:deadsnakes/ppa
 
+add-apt-repository -y ppa:apandada1/brightness-controller
+
 # TODO TODO add ppa for unity [unity7 (suffix/prefix?) was it?] + install
 # (i'm not sure why i thought this was from a ppa. i just installed it via:
 # `sudo apt install ubuntu-unity-desktop` this time, in fresh 18.04.
@@ -47,6 +49,8 @@ apt update
 # https://vi.stackexchange.com/questions/20107
 # (or is that literally just for the GUI version that maybe also comes w/ that
 # package?)
+
+apt install -y brightness-indicator
 
 # NOTE: indicator-multiload will only work with unity, not the default gnome in >=18.04
 apt install -y indicator-multiload
