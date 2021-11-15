@@ -1,0 +1,7 @@
+# Template for .ycm_extra_conf.py files to configure YouCompleteMe vim plugin
+def Settings(**kwargs):
+  return {
+    # Intended to replace the path on the right with the path to the current python
+    # interpreter (i.e. via output of `which python` or `sys.executable` in python)
+    'interpreter_path': '{{REPLACE_ME}}'
+  }
