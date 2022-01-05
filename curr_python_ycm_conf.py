@@ -4,6 +4,9 @@ import sys
 from pathlib import Path
 
 
+# TODO also recursively search for .ycm_extra_conf.py in parent dirs
+# (as YCM does) and fail if there are any, saying where it was found
+
 def main():
     template = Path(__file__).parent.resolve() / 'ycm_extra_conf.py.template'
 
