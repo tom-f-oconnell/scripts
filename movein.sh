@@ -156,6 +156,9 @@ fi
 # TODO need something like a -y flag here?
 snap install hub --classic
 
+# Seems to install as if --user by default on 20.04
+sudo -u $USER pip install grip
+
 # not sure whether maven already include something that would make default-jdk
 # irrelevant
 # for https://github.com/hoijui/ReZipDoc
