@@ -22,10 +22,17 @@ if __name__ == '__main__':
     prefix2auth_type = {
         'git@': 's',
         'https://': 'h',
-        'git://': 'g'
+        'git://': 'g',
     }
     for line in sys.stdin:
         url = line.split()[1]
+
+        # TODO may want to make this disable-able somehow, in case the repo name
+        # actually does end with .git / people actually want that convention
+        dot_git_suffix = '.git'
+        if url.endswith(dot_git_suffix):
+            url = url[:-len(dot_git_suffix)]
+
         for prefix, auth_type in prefix2auth_type.items():
             if url.startswith(prefix):
                 curr_prefix = prefix
