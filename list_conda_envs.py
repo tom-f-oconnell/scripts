@@ -15,7 +15,7 @@ from subprocess import check_output
 import json
 from os.path import split
 
-from bash_completion import list_or_complete
+from bash_completion import complete
 
 
 def list_conda_envs():
@@ -32,7 +32,7 @@ def list_conda_envs():
 
 def main():
     env_names = list_conda_envs()
-    list_or_complete(env_names)
+    complete(env_names)
 
 
 if __name__ == '__main__':

@@ -5,24 +5,24 @@ Convenience function for making Python scripts to provide bash completions
 import sys
 
 
-def list_or_complete(str_list):
+def complete(str_list):
+    """For bash tab completion of strings in input list.
 
-    # Case where this script is explicitly called as `list_conda_envs.py`
-    if len(sys.argv) == 1:
-        for x in str_list:
+    Add something like the following to your bash config:
+    complete -o nosort -C <your-script-calling-this>.py <function/alias/etc to complete>
+
+    The above may require some extra completion thing to be enabled or installed, I
+    forget.
+    """
+    if len(sys.argv) != 4:
+        raise ValueError('expected length 4 sys.argv (bash completion inputs)')
+
+    # When used as completion script, there should be 4 elements in sys.argv:
+    # script name, command being completed, partial word being typed, previous word
+    being_typed = sys.argv[2]
+    for x in str_list:
+        if x.startswith(being_typed):
             print(x)
-
-    elif len(sys.argv) == 4:
-        # When used as completion script, there should be 4 elements in sys.argv:
-        # script name, command being completed, partial word being typed, previous word
-        being_typed = sys.argv[2]
-        for x in str_list:
-            if x.startswith(being_typed):
-                print(x)
-            else:
-                continue
-    else:
-        raise ValueError('expected length 1 or 4 sys.argv (manual / completion-script '
-            'usage, respectively)'
-        )
+        else:
+            continue
 
