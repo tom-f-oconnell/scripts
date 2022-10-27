@@ -106,6 +106,10 @@ apt install -y tmux smartmontools iotop htop
 # For https://github.com/cykerway/complete-alias
 apt install -y bash-completion
 
+# golang is 1.13.8 in 20.04 as of 2022-07-29, which is > the min 1.14 required by
+# omrijarel/deej (as of the same time).
+apt install -y libgtk-3-dev libappindicator3-dev libwebkit2gtk-4.0-dev golang
+
 # TODO install black python formatter (snap seemed to be best / only option for
 # 16.04, but is that also the case for 18.04+?)
 
