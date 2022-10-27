@@ -48,6 +48,31 @@ apt install -y checkinstall
 # version of pybind11 doesn't seem to be installed
 apt install -y python3-pybind11
 
+# Didn't seem to need to install this for either older version of FreeCAD ~2021 or
+# before upgrading to 20.04
+# https://stackoverflow.com/questions/61754702
+apt install -y python3-vtk7
+# Not actually sure python3-vtk7 is needed at all
+# https://forum.freecadweb.org/viewtopic.php?style=5&f=4&t=60368
+apt install -y libvtk7-dev
+
+# Draft workbench stuff / stuff that uses it err's if this isn't installed.
+apt install -y python3-pivy
+
+# From leohecks May 02, 2020 comment here:
+# https://forum.freecadweb.org/viewtopic.php?f=4&t=45413&start=20#p395462
+# "In addition, I had to add set(Boost_NO_BOOST_CMAKE ON) to SetupBoost.cmake"
+# (I did not find I had to do the above step, at least to get compile to work, though I
+# haven't tested features of software much at all yet)
+apt install -y pyqt5-dev-tools
+# TODO only do in 20.04 / as needed + fail if link targets exist and are not links
+ln -s /usr/bin/pyrcc5 /usr/bin/pyside2-rcc
+ln -s /usr/bin/pyuic5 /usr/bin/pyside2-uic
+
+# At output of 2022-02-25 compilation in 20.04, I'm also getting a warning telling me to
+# install python3-pyside2.qtnetwork
+apt install -y python3-pyside2.qtnetwork python3-pyside2.qtwebengine* python3-pyside2.qtwebchannel
+
 # TODO is this how to configure this flag? ./configure scripts above?
 # https://www.freecadweb.org/wiki/CompileOnUnix#Compile_FreeCAD
 # "For Debian based systems this option is not needed when using the pre-built

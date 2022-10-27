@@ -68,7 +68,7 @@ while getopts ":pn:" o; do
 done
 shift $((OPTIND-1))
 # TODO most getopts examples don't seem to have this second line which the SO
-# post with the boolean flag example had. what is its purpose? is it the 
+# post with the boolean flag example had. what is its purpose? is it the
 # "for dealing with ... post-getopts command line arguments" he mentions?
 #[[ "${1}" == "--" ]] && shift
 
@@ -92,7 +92,7 @@ if ${opt_prompt_for_path}; then
     printf "Enter directory to open (${opt_n}) terminals in (do not use ~):\n"
 
     # Wanted the `read` prompt to include the evaluated regular $PS1, but I'm
-    # not sure that will be possible within bash -c, as that precludes -i, and 
+    # not sure that will be possible within bash -c, as that precludes -i, and
     # -i or something related to it might be required for $PS1 to be evaluated
     # as it might usually be. Not sure. This seems to basically evaluate as the
     # empty string in the `bash -c ...` context. Echoing this in a regular
@@ -182,6 +182,7 @@ function open_and_tile_lr_terminals() {
     # TODO figure out how to get this to actually print color? the `ls --color`
     # output is colored appropriately, but the printf output isn't. printf
     # doesn't have a --color option.
+    # TODO what was the purpose of this print again???
     printf "${LIGHT_GREEN}${USER}@$(hostname)${END_COLOR}:"
     gnome-terminal --working-directory=${wd} -- bash -c \
         "printf \"\n${LIGHT_BLUE}${wd}${END_COLOR}$ ls\n\"; ls --color; echo ''; exec bash"
