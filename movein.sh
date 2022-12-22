@@ -26,6 +26,9 @@ fi
 # TODO maybe consider replacing w/ ubuntuhandbook1/keepass2 (if compatible /
 # migration available), or see if other ppas are more active / more recommended
 #add-apt-repository -y ppa:eugenesan/ppa
+#
+# Should work in 20.04 at least:
+add-apt-repository -y ppa:ubuntuhandbook1/keepass2
 
 add-apt-repository -y ppa:deadsnakes/ppa
 
@@ -45,12 +48,21 @@ add-apt-repository -y ppa:apandada1/brightness-controller
 
 apt update
 
+# TODO might need to put this behind a test for 20.04 / sufficient version to have this
+# available. not sure it's available in 18.04 (no need in <=16.04...) is it?
+# TODO how to automatically select lightdm (this) as default in interactive TUI that
+# pops up?
+apt install -y ubuntu-unity-desktop
+
 # TODO maybe install dbus-x11 to get vim-gtk to work w/ wsl?
 # https://vi.stackexchange.com/questions/20107
 # (or is that literally just for the GUI version that maybe also comes w/ that
 # package?)
 
+# TODO still want?
 apt install -y brightness-indicator
+# Should work in 20.04 at least:
+apt install -y keepass2
 
 # NOTE: indicator-multiload will only work with unity, not the default gnome in >=18.04
 apt install -y indicator-multiload
@@ -91,6 +103,7 @@ apt install -y openssh-server
 
 apt install -y python3-pip python3-venv
 
+# TODO still necessary / meaningful for 20.04? is python3.8 the system python there?
 # All from deadsnakes PPA
 apt install -y python3.8 python3.8-dev python3.8-venv python3.8-tk
 
@@ -143,6 +156,9 @@ fi
 # :bind h tableft -1
 # :bind l tableft
 
+# TODO fix cause it doesn't seem to be detecting keys correctly (had copied dir w/
+# id_rsa* files from a backup and it still decided to run. maybe `-e` isn't the right
+# test?)
 # TODO TODO update to new name github has in their instructions (the ecdsa or
 # whatever algorithm rather than rsa) (+ probably refactor check for the key into
 # mk_key.sh)
@@ -191,3 +207,8 @@ sudo -u $USER pip install grip
 # TODO install virtualbox for vagrant
 # TODO automate vagrant install? it seems it might be best to download installer
 # from their website...
+
+# for Dropbox
+apt install -y python3-gpg
+# TODO TODO figure out a way to do this all as `sudo -u $USER`
+#cd ~ && wget -O - "https://www.dropbox.com/download?plat=lnx.x86_64" | tar xzf -
