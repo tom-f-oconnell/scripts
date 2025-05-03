@@ -5,10 +5,11 @@ Uses grep to search Python files in subdirectories that are Git repos I have
 committed to.
 """
 
+# TODO TODO TODO generalize to my repos, but non-python files as well
+# (maybe alias of 'grepm'?) also expose CLI flag for non_git_dirs?
+
 # TODO TODO exclude submodules that are not mine but are subdirs of git repos
 # that are mine (e.g. Vim addons under my dotfiles repo)
-# TODO maybe generalize to my repos, but non-python files as well
-# (maybe alias of 'grepm'?) also expose CLI flag for non_git_dirs?
 
 import sys
 import glob
