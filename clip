@@ -1,0 +1,139 @@
+#!/usr/bin/env python3
+
+from argparse import ArgumentParser
+from datetime import datetime, timedelta
+from pathlib import Path
+import subprocess
+
+
+def chunker(seq, size):
+    # https://stackoverflow.com/questions/434287
+    return (seq[pos:pos + size] for pos in range(0, len(seq), size))
+
+
+input_dt_fmt = '%H%M%S'
+def str2dt(s: str) -> datetime:
+    parts = [x for x in chunker(s, 2)]
+    assert 0 < len(parts[0]) <= 2
+    assert all(len(p) == 2 for p in parts[1:])
+    # TODO delete
+    print(f'str2dt: (initial) {parts=}')
+    #
+    if len(parts) > 3:
+        raise ValueError('input too long. expected (at most) HHMMSS.')
+
+    # TODO also handle len(parts) == 1 (+ delete this)
+    if len(parts) < 2:
+        raise NotImplementedError(
+            'add support for SS input (instead of just HHMMSS/MMSS)'
+        )
+    #
+
+    if len(parts) == 2:
+        parts = ['00'] + parts
+
+    # TODO delete
+    print(f'str2dt: {parts=}')
+    #
+
+    s = ''.join(parts)
+    # TODO delete
+    print(f'str2dt: {s=}')
+    #
+    return datetime.strptime(s, input_dt_fmt)
+
+
+def hhmmss_dt(t1: str, t2: str) -> timedelta:
+    return str2dt(t2) - str2dt(t1)
+
+
+# datetime format for ffmpeg commands
+output_dt_fmt = '%H:%M:%S'
+def format_timedelta(td: timedelta) -> str:
+    assert timedelta(seconds=0) < td < timedelta(hours=100)
+    # TODO test w/ HH:MM:SS input as well as H:MM:SS input (does seem to work w/ latter,
+    # at leat)
+    t0 = datetime.strptime('0:00:00', output_dt_fmt)
+    return (t0 + td).strftime(output_dt_fmt)
+
+
+def escape_path(path: Path) -> str:
+    # don't actually seem to need to escape path how i'm calling this script
+    # (and enclosing in single quotes didn't work w/ ffmpeg)
+    return str(path)
+
+
+def clip(path: Path, t1: str, t2: str) -> None:
+    # TODO delete
+    print(f'{t1=}')
+    print(f'{t2=}')
+    #
+    assert path.is_file()
+    d1 = str2dt(t1)
+    # TODO delete
+    print(f'{d1=}')
+    #
+
+    td = hhmmss_dt(t1, t2)
+    # TODO delete
+    print(f'{td=}')
+    #
+
+    # TODO need to handle if extension has multiple '.' before it? prob ok
+    #
+    # e.g. '.avi' / '.mp4' / etc
+    ext = path.suffix
+
+    clip_num = 0
+    while True:
+        output_path = path.parent / f'{path.stem}.{clip_num}{ext}'
+        if not output_path.exists():
+            break
+        clip_num += 1
+
+    # TODO delete
+    print(f'       {path=}')
+    print(f'{output_path=}')
+    #
+
+    # https://askubuntu.com/questions/56022
+    cmd_parts = [
+        'ffmpeg',
+
+        '-ss', d1.strftime(output_dt_fmt),
+
+        # -t should accept a duration in HH:MM:SS format
+        '-t', format_timedelta(td),
+
+        '-i', escape_path(path),
+
+        # TODO explain these
+        '-vcodec', 'copy', '-acodec', 'copy',
+        #
+
+        escape_path(output_path)
+    ]
+    # TODO delete
+    print(f'{cmd_parts=}')
+    #
+
+    subprocess.run(cmd_parts)
+
+
+def main():
+    parser = ArgumentParser()
+
+    # TODO make sure these are handled as a required positional args (should be)
+    parser.add_argument('input', help='video file to clip')
+    parser.add_argument('start', help=f'start time in {input_dt_fmt} format')
+    parser.add_argument('end', help=f'end time in {input_dt_fmt} format')
+
+    args = parser.parse_args()
+
+    path = Path(args.input)
+    clip(path, args.start, args.end)
+
+
+if __name__ == '__main__':
+    main()
+
