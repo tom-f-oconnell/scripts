@@ -102,17 +102,24 @@ def main():
         line_without_pane_pid = line[:-len(pane_pid_part)].strip()
 
         # should be at start of date part, and only there
-        delim = ' ('
+        #delim = ' ('
+        delim = ': '
         assert line_without_pane_pid.count(delim) == 1, ('need to find some other way '
             'to split rigfht after <session_name>: '
         )
         edited_files_str = format_files_being_edited_under_pid(pane_pid)
         if len(edited_files_str) > 0:
             before, after = line_without_pane_pid.split(delim)
-            edited_files_str = f' ({edited_files_str})'
-            # inserting this after pane_current_command, and right before
-            # t:session_created
-            line_without_pane_pid = before + delim.join([edited_files_str, after])
+            line_without_pane_pid = (
+                # TODO delete. harder to read than i thought
+                # inserting this after pane_current_command, and right before
+                # t:session_created
+                # works if trying to insert right before date part
+                #before + delim.join([f' ({edited_files_str})', after])
+
+                # should work to insert right after session ID (at start of line)
+                delim.join([before, f'({edited_files_str}) ']) + after
+            )
 
         # to shorten paths with '/home/<user>/' in them, replacing that part with '~/'
         line_without_pane_pid = re.sub(f'\s{home_str}', ' ~/', line_without_pane_pid)
