@@ -32,6 +32,9 @@ add-apt-repository -y ppa:ubuntuhandbook1/keepass2
 
 add-apt-repository -y ppa:deadsnakes/ppa
 
+# for more recent git than default in distro
+apt-add-repository -y ppa:git-core/ppa
+
 add-apt-repository -y ppa:apandada1/brightness-controller
 
 # TODO TODO add ppa for unity [unity7 (suffix/prefix?) was it?] + install
