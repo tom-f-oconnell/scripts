@@ -73,8 +73,9 @@ def main():
     # NOTE: pane_pid must be alone as the last part of the line (stripped out and used
     # below)
     ls_format = (
-        '#{session_name}: (#{t:session_created}) #{pane_current_path} '
-        ' #{pane_current_command} #{pane_pid}'
+        '#{session_name}: #{pane_current_path} #{pane_current_command} '
+        # TODO shorten date format? doesn't nicely fit on a half screen now
+        '(#{t:session_created}) #{pane_pid}'
     )
     lines = check_output(['tmux', 'list-sessions', '-F', ls_format]).decode(
         ).splitlines()
@@ -100,9 +101,18 @@ def main():
 
         line_without_pane_pid = line[:-len(pane_pid_part)].strip()
 
+        # should be at start of date part, and only there
+        delim = ' ('
+        assert line_without_pane_pid.count(delim) == 1, ('need to find some other way '
+            'to split rigfht after <session_name>: '
+        )
         edited_files_str = format_files_being_edited_under_pid(pane_pid)
         if len(edited_files_str) > 0:
-            line_without_pane_pid += f' ({edited_files_str})'
+            before, after = line_without_pane_pid.split(delim)
+            edited_files_str = f' ({edited_files_str})'
+            # inserting this after pane_current_command, and right before
+            # t:session_created
+            line_without_pane_pid = before + delim.join([edited_files_str, after])
 
         # to shorten paths with '/home/<user>/' in them, replacing that part with '~/'
         line_without_pane_pid = re.sub(f'\s{home_str}', ' ~/', line_without_pane_pid)
