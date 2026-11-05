@@ -10,16 +10,17 @@ out. Stdlib only.
 
 Usage (from the project directory, e.g. with Claude Code's `!` prefix, whose output is added to the
 conversation's context; with respondToBashCommands false in settings.json Claude does not reply to it):
-    claude-conversation                 # latest session of this directory -> HTML, prints the path
+    claude-conversation                 # latest session of this directory -> HTML, prints its file:// URL
     claude-conversation --open          # ... and open it in the browser
     claude-conversation --open --auto-refresh 30   # page reloads itself every 30 s (re-run to regenerate)
     claude-conversation --session <id-prefix> | --jsonl <file> | --all   # other sessions
     claude-conversation --watch 20 --open   # regenerate every 20 s until Ctrl+C (with auto-refresh)
-Output: ~/.claude/conversations/<project-slug>/<session-id>.html (override with --out). One line is
-printed per session: the HTML path, the session's name (as `/resume` lists it) and its prompt count.
-Every run also rewrites ~/.claude/conversations/index.html, which links every session page under
-that directory (all projects, grouped by project), and prints its file:// URL last. --open uses
-xdg-open on each generated page, so it does nothing useful over SSH: open the printed paths instead.
+Output: ~/.claude/conversations/<project-slug>/<session-id>.html (override with --out). Every run also
+rewrites ~/.claude/conversations/index.html, which links every session page under that directory (all
+projects, grouped by project). Only one file:// URL is printed: the page's, or the index's if several
+sessions were rendered. With -v, one line per session is printed instead (HTML path, the session's
+name as `/resume` lists it, and its prompt count), then the index URL. --open uses xdg-open on each
+generated page, so it does nothing useful over SSH: open the printed URL instead.
 """
 from __future__ import annotations
 
@@ -358,6 +359,9 @@ def main() -> None:
     ap.add_argument('--open', action='store_true', help='open the page in the browser (xdg-open)')
     ap.add_argument('--auto-refresh', type=int, default=0, metavar='SEC', help='page reloads itself every SEC seconds')
     ap.add_argument('--watch', type=int, default=0, metavar='SEC', help='regenerate every SEC seconds (implies --auto-refresh SEC)')
+    ap.add_argument('-v', '--verbose', action='store_true',
+        help='print each page path with its session name and prompt count, then the index URL '
+        '(default: only one URL, of the page or, for several sessions, of the index)')
     args = ap.parse_args()
     slug = project_slug(args.project.resolve())
     pdir = PROJECTS / slug
@@ -374,6 +378,7 @@ def main() -> None:
         if not files:
             sys.exit('no matching session')
     refresh = args.watch or args.auto_refresh
+    first_pass = True
     while True:
         outs = []
         for f in files:
@@ -386,9 +391,14 @@ def main() -> None:
             out.parent.mkdir(parents=True, exist_ok=True)
             out.write_text(render(turns, name, f, args.project.resolve(), refresh))
             outs.append(out)
-            print(f'{out}  "{name}"  ({plural(len(prompts), "prompt")})')
+            if args.verbose:
+                print(f'{out}  "{name}"  ({plural(len(prompts), "prompt")})', flush=True)
         index, n_sessions, n_projects = write_index()
-        print(f'index of all rendered sessions: {index.as_uri()}  ({plural(n_sessions, "session")} in {plural(n_projects, "project")})')
+        if args.verbose:
+            print(f'index of all rendered sessions: {index.as_uri()}  ({plural(n_sessions, "session")} in {plural(n_projects, "project")})', flush=True)
+        elif first_pass:   # the URLs do not change between --watch passes
+            print((outs[0].resolve() if len(outs) == 1 else index).as_uri(), flush=True)
+        first_pass = False
         if args.open:
             for out in outs:
                 subprocess.Popen(['xdg-open', str(out)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
