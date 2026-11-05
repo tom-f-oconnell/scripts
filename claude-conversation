@@ -14,7 +14,8 @@ Usage (from the project directory, e.g. with Claude Code's `!` prefix, which cos
     claude-conversation --open --auto-refresh 30   # page reloads itself every 30 s (re-run to regenerate)
     claude-conversation --session <id-prefix> | --jsonl <file> | --all   # other sessions
     claude-conversation --watch 20 --open   # regenerate every 20 s until Ctrl+C (with auto-refresh)
-Output: ~/.claude/conversations/<project-slug>/<session-id>.html (override with --out).
+Output: ~/.claude/conversations/<project-slug>/<session-id>.html (override with --out). One line is
+printed per session: the HTML path, the session's name (as `/resume` lists it) and its prompt count.
 """
 from __future__ import annotations
 
@@ -78,10 +79,22 @@ def local_time(ts: str) -> str:
         return ts or ''
 
 
+def session_title(entries) -> str:
+    """The session's name as `/resume` lists it: the title given with /rename if any, else the
+    latest AI-generated title (absent from sessions that never completed a turn)."""
+    custom = ai = ''
+    for o in entries:
+        if o.get('type') == 'custom-title':
+            custom = o.get('customTitle') or custom
+        elif o.get('type') == 'ai-title':
+            ai = o.get('aiTitle') or ai
+    return custom or ai
+
+
 def build_turns(path: Path):
     """Groups entries into turns: each user prompt with the assistant text that follows it.
 
-    Within a turn, an assistant text is a "reply to a background event" (folded away) when
+    Returns (turns, session title). Within a turn, an assistant text is a "reply to a background event" (folded away) when
     it directly follows a task notification / local command with no tool call in between
     and is short; everything else is the assistant's own stream of work, whose last text is
     the answer. Subagent hand-backs and images are part of the work, not events.
@@ -143,7 +156,7 @@ def build_turns(path: Path):
             turn['updates'] = turn['texts'][pick + 1:]
         else:
             turn['answer'] = ''; turn['intermediate'] = turn['texts']; turn['updates'] = []
-    return turns
+    return turns, session_title(entries)
 
 
 # --- minimal markdown -> HTML (headings, lists, tables, code, bold / italic / links)
@@ -300,12 +313,17 @@ def main() -> None:
     while True:
         outs = []
         for f in files:
-            turns = build_turns(f)
+            turns, name = build_turns(f)
+            prompts = [t for t in turns if t['kind'] == 'prompt']
+            if not name:   # untitled: fall back to the start of the first prompt
+                first = prompts[0]['prompt'].split('\n')[0] if prompts else ''
+                name = (first[:60] + '...') if len(first) > 60 else first or '(empty session)'
             out = args.out if (args.out and len(files) == 1) else OUT_ROOT / slug / f'{f.stem}.html'
             out.parent.mkdir(parents=True, exist_ok=True)
-            out.write_text(render(turns, f'Claude Code session {f.stem[:8]} ({args.project.resolve().name})', f, refresh))
+            title = f'{name} · Claude Code session {f.stem[:8]} ({args.project.resolve().name})'
+            out.write_text(render(turns, title, f, refresh))
             outs.append(out)
-            print(f'{out}  ({len([t for t in turns if t["kind"] == "prompt"])} prompts)')
+            print(f'{out}  "{name}"  ({len(prompts)} prompt{"s" if len(prompts) != 1 else ""})')
         if args.open:
             for out in outs:
                 subprocess.Popen(['xdg-open', str(out)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
