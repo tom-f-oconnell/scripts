@@ -15,28 +15,42 @@ conversation's context; with respondToBashCommands false in settings.json Claude
     claude-conversation --open --auto-refresh 30   # page reloads itself every 30 s (re-run to regenerate)
     claude-conversation --session <id-prefix> | --jsonl <file> | --all   # other sessions
     claude-conversation --watch 20 --open   # regenerate every 20 s until Ctrl+C (with auto-refresh)
+    claude-conversation --serve         # ... and print an http:// URL instead (see below)
+    claude-conversation --stop-server
 Output: ~/.claude/conversations/<project-slug>/<session-id>.html (override with --out). Every run also
 rewrites ~/.claude/conversations/index.html, which links every session page under that directory (all
 projects, grouped by project). Only one file:// URL is printed: the page's, or the index's if several
 sessions were rendered. With -v, one line per session is printed instead (HTML path, the session's
 name as `/resume` lists it, and its prompt count), then the index URL. --open uses xdg-open on each
 generated page, so it does nothing useful over SSH: open the printed URL instead.
+
+--serve starts a background HTTP server for ~/.claude/conversations on all interfaces (port 10041 by
+default; --port), unless it is already running, and prints http:// URLs instead of file:// ones.
+Their host is the address this machine was reached at over SSH (from $SSH_CONNECTION, so the link
+works from the SSH client's browser), else localhost. The server has no access control: anyone who
+can reach the port can read every rendered session. It runs until --stop-server.
 """
 from __future__ import annotations
 
 import argparse
 import datetime as dt
+import functools
 import html
+import http.client
+import http.server
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import time
+import urllib.parse
 from pathlib import Path
 
 PROJECTS = Path.home() / '.claude' / 'projects'
 OUT_ROOT = Path.home() / '.claude' / 'conversations'
+SERVER_PORT = 10041
 TAGS_NOT_PROMPT = ('<task-notification', '<system-reminder', '<local-command', '<command-name',
     '<bash-input', '<bash-stdout', '<bash-stderr', 'Another Claude session sent a message',
     '[Image:', 'Base directory for this skill', '<agent-message')
@@ -341,6 +355,94 @@ def write_index():
     return out, n, len(by_project)
 
 
+class QuietHandler(http.server.SimpleHTTPRequestHandler):
+    server_version = 'claude-conversation'   # lets server_status() recognize its own server
+
+    def log_message(self, *args):
+        pass
+
+
+def run_server(port: int) -> None:
+    """Serves OUT_ROOT on all interfaces until killed (the process that --serve starts)."""
+    handler = functools.partial(QuietHandler, directory=str(OUT_ROOT))
+    http.server.ThreadingHTTPServer(('', port), handler).serve_forever()
+
+
+def server_status(port: int) -> str:
+    """'ours' (this script's server answers on port), 'other' (something else does) or 'none'."""
+    try:
+        conn = http.client.HTTPConnection('127.0.0.1', port, timeout=2)
+        conn.request('HEAD', '/')
+        server = conn.getresponse().getheader('Server') or ''
+    except OSError:
+        return 'none'
+    except http.client.HTTPException:
+        return 'other'
+    return 'ours' if server.startswith(QuietHandler.server_version) else 'other'
+
+
+def server_files(port: int):
+    """(pid file, log file) of the server on port."""
+    return (Path.home() / '.claude' / f'conversation-server-{port}.pid',
+        Path.home() / '.claude' / f'conversation-server-{port}.log')
+
+
+def ensure_server(port: int) -> str:
+    """Starts the background server on port unless it is running. Returns 'started' or 'running'."""
+    status = server_status(port)
+    if status == 'ours':
+        return 'running'
+    if status == 'other':
+        sys.exit(f'port {port} is in use by another program (pick another with --port)')
+    pidfile, logfile = server_files(port)
+    OUT_ROOT.mkdir(parents=True, exist_ok=True)
+    # own session and no inherited stdio, so it outlives this process and does not hold open the
+    # pipe of whatever ran it (e.g. Claude Code's `!`, which would otherwise wait for it)
+    with logfile.open('w') as log:
+        proc = subprocess.Popen([sys.executable, os.path.abspath(__file__), '--_server', str(port)],
+            stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True)
+    for _ in range(50):
+        if server_status(port) == 'ours':
+            pidfile.write_text(f'{proc.pid}\n')
+            return 'started'
+        if proc.poll() is not None:
+            break
+        time.sleep(0.1)
+    sys.exit(f'could not start the server on port {port} (see {logfile})')
+
+
+def stop_server(port: int) -> str:
+    pidfile, _ = server_files(port)
+    try:
+        pid = int(pidfile.read_text())
+        is_ours = b'--_server' in Path(f'/proc/{pid}/cmdline').read_bytes()
+    except (OSError, ValueError):
+        is_ours = False
+    if not is_ours:
+        if server_status(port) == 'ours':
+            return f'server on port {port} has no valid pid file ({pidfile}): kill it by hand'
+        return f'no server running on port {port}'
+    os.kill(pid, signal.SIGTERM)
+    pidfile.unlink()
+    return f'stopped server on port {port} (pid {pid})'
+
+
+def server_base(port: int) -> str:
+    """http:// URL of OUT_ROOT, at the address SSH reached this machine on (else localhost)."""
+    ssh = os.environ.get('SSH_CONNECTION', '').split()
+    host = ssh[2] if len(ssh) == 4 else 'localhost'
+    return f'http://{f"[{host}]" if ":" in host else host}:{port}'
+
+
+def url_for(path: Path, base: str | None) -> str:
+    """http:// URL of path under the server at base when served (it is within OUT_ROOT), else file://."""
+    path = path.resolve()
+    if base and path.is_relative_to(OUT_ROOT.resolve()):
+        rel = path.relative_to(OUT_ROOT.resolve()).as_posix()
+        return f'{base}/' + ('' if rel == 'index.html' else urllib.parse.quote(rel))
+    return path.as_uri()
+
+
 def plural(n: int, word: str) -> str:
     return f'{n} {word}{"" if n == 1 else "s"}'
 
@@ -359,10 +461,19 @@ def main() -> None:
     ap.add_argument('--open', action='store_true', help='open the page in the browser (xdg-open)')
     ap.add_argument('--auto-refresh', type=int, default=0, metavar='SEC', help='page reloads itself every SEC seconds')
     ap.add_argument('--watch', type=int, default=0, metavar='SEC', help='regenerate every SEC seconds (implies --auto-refresh SEC)')
+    ap.add_argument('--serve', action='store_true',
+        help='start a background HTTP server for the pages (unless running) and print http:// URLs')
+    ap.add_argument('--port', type=int, default=SERVER_PORT, help=f'port for --serve (default: {SERVER_PORT})')
+    ap.add_argument('--stop-server', action='store_true', help='stop the --serve server on --port and exit')
+    ap.add_argument('--_server', type=int, help=argparse.SUPPRESS)
     ap.add_argument('-v', '--verbose', action='store_true',
         help='print each page path with its session name and prompt count, then the index URL '
         '(default: only one URL, of the page or, for several sessions, of the index)')
     args = ap.parse_args()
+    if args._server:
+        return run_server(args._server)
+    if args.stop_server:
+        return print(stop_server(args.port))
     slug = project_slug(args.project.resolve())
     pdir = PROJECTS / slug
     if args.jsonl:
@@ -378,6 +489,12 @@ def main() -> None:
         if not files:
             sys.exit('no matching session')
     refresh = args.watch or args.auto_refresh
+    base = None
+    if args.serve:
+        status = ensure_server(args.port)
+        base = server_base(args.port)
+        if args.verbose:
+            print(f'server {"started" if status == "started" else "already running"}: {base}/', flush=True)
     first_pass = True
     while True:
         outs = []
@@ -392,16 +509,16 @@ def main() -> None:
             out.write_text(render(turns, name, f, args.project.resolve(), refresh))
             outs.append(out)
             if args.verbose:
-                print(f'{out}  "{name}"  ({plural(len(prompts), "prompt")})', flush=True)
+                print(f'{url_for(out, base) if base else out}  "{name}"  ({plural(len(prompts), "prompt")})', flush=True)
         index, n_sessions, n_projects = write_index()
         if args.verbose:
-            print(f'index of all rendered sessions: {index.as_uri()}  ({plural(n_sessions, "session")} in {plural(n_projects, "project")})', flush=True)
+            print(f'index of all rendered sessions: {url_for(index, base)}  ({plural(n_sessions, "session")} in {plural(n_projects, "project")})', flush=True)
         elif first_pass:   # the URLs do not change between --watch passes
-            print((outs[0].resolve() if len(outs) == 1 else index).as_uri(), flush=True)
+            print(url_for(outs[0] if len(outs) == 1 else index, base), flush=True)
         first_pass = False
         if args.open:
             for out in outs:
-                subprocess.Popen(['xdg-open', str(out)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                subprocess.Popen(['xdg-open', url_for(out, base)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             args.open = False
         if not args.watch:
             break
