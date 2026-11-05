@@ -8,7 +8,8 @@ intermediate assistant text (progress notes between tool calls, replies to backg
 notifications) is folded under each turn. Tool calls, tool results and thinking are left
 out. Stdlib only.
 
-Usage (from the project directory, e.g. with Claude Code's `!` prefix, which costs no tokens):
+Usage (from the project directory, e.g. with Claude Code's `!` prefix, whose output is added to the
+conversation's context; with respondToBashCommands false in settings.json Claude does not reply to it):
     claude-conversation                 # latest session of this directory -> HTML, prints the path
     claude-conversation --open          # ... and open it in the browser
     claude-conversation --open --auto-refresh 30   # page reloads itself every 30 s (re-run to regenerate)
