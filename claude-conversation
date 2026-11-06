@@ -12,7 +12,7 @@ Usage (from the project directory, e.g. with Claude Code's `!` prefix, whose out
 conversation's context; with respondToBashCommands false in settings.json Claude does not reply to it):
     claude-conversation                 # latest session of this directory -> HTML, prints its file:// URL
     claude-conversation --open          # ... and open it in the browser
-    claude-conversation --open --auto-refresh 30   # page reloads itself every 30 s (re-run to regenerate)
+    claude-conversation --open --auto-refresh 30   # page reloads itself every 30 s (see below)
     claude-conversation --session <id-prefix> | --jsonl <file> | --all   # other sessions
     claude-conversation --watch 20 --open   # regenerate every 20 s until Ctrl+C (with auto-refresh)
     claude-conversation --serve         # ... and print an http:// URL instead (see below)
@@ -26,15 +26,23 @@ generated page, so it does nothing useful over SSH: open the printed URL instead
 title line, "claude conversations" (linking to the index from session pages), followed by when it was
 generated (so it advances under --watch) and, with --serve, the server's address, host name and pid.
 
+--auto-refresh is for pages that something other than --watch regenerates: you re-running the command,
+or e.g. a Claude Code Stop hook. Once a page has it, runs regenerating that page must pass it again
+(they exit with an error otherwise, rather than silently stopping open tabs from reloading), or pass
+--auto-refresh 0 to turn it off.
+
 --serve starts a background HTTP server for ~/.claude/conversations on all interfaces (port 10041 by
 default; --port), unless it is already running, and prints http:// URLs instead of file:// ones.
 Their host is the address this machine was reached at over SSH (from $SSH_CONNECTION, so the link
 works from the SSH client's browser), else localhost. The server has no access control: anyone who
-can reach the port can read every rendered session. It runs until --stop-server.
+can reach the port can read every rendered session. It runs until --stop-server. When a --watch run in
+a terminal ends (Ctrl+C), it asks whether to stop the server: anything but "n", including another
+Ctrl+C, stops it.
 """
 from __future__ import annotations
 
 import argparse
+import atexit
 import datetime as dt
 import functools
 import html
@@ -278,13 +286,17 @@ function cp(id,btn){const el=document.getElementById(id);navigator.clipboard.wri
 """
 
 
-def render(turns, name: str, source: Path, project: Path, auto_refresh: int, header: str) -> str:
+def render(turns, name: str, source: Path, project: Path, refresh: int, header: str, auto_refresh: int) -> str:
+    """The session page. It reloads itself every refresh seconds (if not 0), and records auto_refresh
+    (the --auto-refresh interval later runs must repeat) in its metadata.
+    """
     prompts = [t for t in turns if t['kind'] == 'prompt']
     n = len(prompts)
     title = f'{name} · Claude Code session {source.stem[:8]} ({project.name})'
-    # metadata for the index page, kept near the top of the file so it is cheap to read back
+    # metadata for the index page and later runs, kept near the top of the file so it is cheap to read back
     info = dict(project=str(project), session=source.stem, name=name, prompts=n,
-        first=prompts[0]['time'] if prompts else '', last=prompts[-1]['time'] if prompts else '')
+        first=prompts[0]['time'] if prompts else '', last=prompts[-1]['time'] if prompts else '',
+        auto_refresh=auto_refresh)
     meta = f'<meta name="claude-conversation" content="{html.escape(json.dumps(info), quote=True)}">'
     nav, body = [], []
     k = 0
@@ -315,7 +327,7 @@ def render(turns, name: str, source: Path, project: Path, auto_refresh: int, hea
             f'<div class="prompt"><div class="k">{label} · {t["time"]}</div>{prompt_html}</div>'
             f'<div class="answer" id="a{i}" data-raw="{raw}"><button class="copy" onclick="cp(\'a{i}\',this)">copy answer</button>'
             f'{md(t["answer"]) if t["answer"] else "<p><i>(no final text; see the notes below)</i></p>"}</div>{inter}</section>')
-    refresh = f'<meta http-equiv="refresh" content="{auto_refresh}">' if auto_refresh else ''
+    refresh = f'<meta http-equiv="refresh" content="{refresh}">' if refresh else ''
     return (f'<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">{meta}{refresh}<title>{html.escape(title)}</title>'
         f'<style>{CSS}</style></head><body>{header}<div class="cols"><nav><input id="q" placeholder="search prompts and answers" oninput="flt()">'
         + '\n'.join(nav) + f'</nav><main><div class="meta">{html.escape(title)} · {n} prompts · source {html.escape(str(source))}</div>'
@@ -333,7 +345,9 @@ th{color:var(--muted);font-weight:normal} td.n{text-align:right} a{color:var(--a
 
 
 def session_info(page: Path):
-    """The metadata render() embeds in a session page (None for other HTML files)."""
+    """The metadata render() embeds in a session page (None if page is missing or another HTML file)."""
+    if not page.exists():
+        return None
     m = re.search(r'<meta name="claude-conversation" content="([^"]*)">', page.open(errors='replace').read(4000))
     try:
         return json.loads(html.unescape(m.group(1))) if m else None
@@ -445,8 +459,50 @@ def stop_server(port: int) -> str:
             return f'server on port {port} has no valid pid file ({server_files(port)[0]}): kill it by hand'
         return f'no server running on port {port}'
     os.kill(pid, signal.SIGTERM)
-    server_files(port)[0].unlink()
-    return f'stopped server on port {port} (pid {pid})'
+    for _ in range(30):
+        if server_status(port) != 'ours':
+            server_files(port)[0].unlink()
+            return f'stopped server on port {port} (pid {pid})'
+        time.sleep(0.1)
+    return f'sent SIGTERM to the server on port {port} (pid {pid}), but it is still answering'
+
+
+def stop_command(port: int) -> str:
+    return 'claude-conversation --stop-server' + ('' if port == SERVER_PORT else f' --port {port}')
+
+
+def at_exit_with_server(port: int, started: bool, watch: bool) -> None:
+    """atexit hook of --serve runs. When a --watch run in a terminal ends, asks whether to stop the
+    server: anything but no stops it, including another Ctrl+C. Says how to stop it whenever a --watch
+    run leaves it running, or when a run in a terminal has just started it.
+    """
+    if server_status(port) != 'ours':
+        return
+    pid = server_pid(port)
+    running = f'the server on port {port} (pid {pid or "unknown"}) is still running; stop it with: {stop_command(port)}'
+    interactive = sys.stdin.isatty() and sys.stderr.isatty()
+    if not (watch and interactive):
+        if watch:
+            print(running, file=sys.stderr)
+        elif started and interactive:
+            print(f'started the server in the background (pid {pid}); stop it with: {stop_command(port)}', file=sys.stderr)
+        return
+    how = ''
+    print(f'stop the server on port {port} (pid {pid or "unknown"})? [Y/n] ', end='', file=sys.stderr, flush=True)
+    try:
+        answer = input()
+    except KeyboardInterrupt:
+        answer, how = '', 'Ctrl+C at the prompt: '
+        print(file=sys.stderr)
+    except EOFError:
+        answer = ''
+        print(file=sys.stderr)
+    signal.signal(signal.SIGINT, signal.SIG_IGN)   # answered: let the rest finish
+    if answer.strip().lower() not in ('n', 'no'):
+        print(how + stop_server(port), file=sys.stderr)
+    # whatever happened above (left running, or stopping it failed), say how to stop it if it is up
+    if server_status(port) == 'ours':
+        print(running, file=sys.stderr)
 
 
 def server_base(port: int) -> str:
@@ -488,7 +544,9 @@ def main() -> None:
     ap.add_argument('--all', action='store_true', help='render every session of the project')
     ap.add_argument('--out', type=Path, help='output HTML path (single session)')
     ap.add_argument('--open', action='store_true', help='open the page in the browser (xdg-open)')
-    ap.add_argument('--auto-refresh', type=int, default=0, metavar='SEC', help='page reloads itself every SEC seconds')
+    ap.add_argument('--auto-refresh', type=int, metavar='SEC',
+        help='page reloads itself every SEC seconds, to show regenerations by other runs (e.g. you re-running '
+        'the command, or a Claude Code Stop hook); 0 removes that from a page')
     ap.add_argument('--watch', type=int, default=0, metavar='SEC', help='regenerate every SEC seconds (implies --auto-refresh SEC)')
     ap.add_argument('--serve', action='store_true',
         help='start a background HTTP server for the pages (unless running) and print http:// URLs')
@@ -517,43 +575,56 @@ def main() -> None:
             files = files[:1]
         if not files:
             sys.exit('no matching session')
-    refresh = args.watch or args.auto_refresh
+    outs = [args.out if (args.out and len(files) == 1) else OUT_ROOT / slug / f'{f.stem}.html' for f in files]
+    # open tabs of a page generated with --auto-refresh would silently stop reloading if a run without
+    # it regenerated the page, so such runs are refused (--watch reloads them itself)
+    previous = [(session_info(out) or {}).get('auto_refresh', 0) for out in outs]
+    if args.auto_refresh is None and not args.watch and any(previous):
+        stale = [(sec, out) for sec, out in zip(previous, outs) if sec]
+        sec, out = stale[0]
+        others = f' (and {plural(len(stale) - 1, "other page")})' if len(stale) > 1 else ''
+        sys.exit(f'{out}{others} was generated with --auto-refresh {sec}: pass --auto-refresh {sec} again to '
+            'keep it reloading itself in open tabs, or --auto-refresh 0 to turn that off')
+    keep_refresh = [sec if args.auto_refresh is None else args.auto_refresh for sec in previous]
+    refresh = args.watch or args.auto_refresh or 0
     base = server = None
     if args.serve:
         status = ensure_server(args.port)
+        atexit.register(at_exit_with_server, args.port, started=status == 'started', watch=bool(args.watch))
         base = server_base(args.port)
         server = server_description(args.port)
         if args.verbose:
             print(f'server {"started" if status == "started" else "already running"}: {base}/', flush=True)
     first_pass = True
-    while True:
-        outs = []
-        for f in files:
-            turns, name = build_turns(f)
-            prompts = [t for t in turns if t['kind'] == 'prompt']
-            if not name:   # untitled: fall back to the start of the first prompt
-                first = prompts[0]['prompt'].split('\n')[0] if prompts else ''
-                name = (first[:60] + '...') if len(first) > 60 else first or '(empty session)'
-            out = args.out if (args.out and len(files) == 1) else OUT_ROOT / slug / f'{f.stem}.html'
-            out.parent.mkdir(parents=True, exist_ok=True)
-            index_href = urllib.parse.quote(Path(os.path.relpath(OUT_ROOT / 'index.html', out.parent.resolve())).as_posix())
-            out.write_text(render(turns, name, f, args.project.resolve(), refresh, header_html(server, index_href)))
-            outs.append(out)
+    try:
+        while True:
+            for f, out, keep in zip(files, outs, keep_refresh):
+                turns, name = build_turns(f)
+                prompts = [t for t in turns if t['kind'] == 'prompt']
+                if not name:   # untitled: fall back to the start of the first prompt
+                    first = prompts[0]['prompt'].split('\n')[0] if prompts else ''
+                    name = (first[:60] + '...') if len(first) > 60 else first or '(empty session)'
+                out.parent.mkdir(parents=True, exist_ok=True)
+                index_href = urllib.parse.quote(Path(os.path.relpath(OUT_ROOT / 'index.html', out.parent.resolve())).as_posix())
+                out.write_text(render(turns, name, f, args.project.resolve(), refresh, header_html(server, index_href), keep))
+                if args.verbose:
+                    print(f'{url_for(out, base) if base else out}  "{name}"  ({plural(len(prompts), "prompt")})', flush=True)
+            index, n_sessions, n_projects = write_index(header_html(server))
             if args.verbose:
-                print(f'{url_for(out, base) if base else out}  "{name}"  ({plural(len(prompts), "prompt")})', flush=True)
-        index, n_sessions, n_projects = write_index(header_html(server))
-        if args.verbose:
-            print(f'index of all rendered sessions: {url_for(index, base)}  ({plural(n_sessions, "session")} in {plural(n_projects, "project")})', flush=True)
-        elif first_pass:   # the URLs do not change between --watch passes
-            print(url_for(outs[0] if len(outs) == 1 else index, base), flush=True)
-        first_pass = False
-        if args.open:
-            for out in outs:
-                subprocess.Popen(['xdg-open', url_for(out, base)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            args.open = False
-        if not args.watch:
-            break
-        time.sleep(args.watch)
+                print(f'index of all rendered sessions: {url_for(index, base)}  ({plural(n_sessions, "session")} in {plural(n_projects, "project")})', flush=True)
+            elif first_pass:   # the URLs do not change between --watch passes
+                print(url_for(outs[0] if len(outs) == 1 else index, base), flush=True)
+            first_pass = False
+            if args.open:
+                for out in outs:
+                    subprocess.Popen(['xdg-open', url_for(out, base)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                args.open = False
+            if not args.watch:
+                break
+            time.sleep(args.watch)
+    except KeyboardInterrupt:   # the way --watch ends: no traceback (and --serve's atexit hook runs)
+        print(file=sys.stderr)
+        sys.exit(130)
 
 
 if __name__ == '__main__':
