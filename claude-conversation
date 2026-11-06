@@ -32,14 +32,15 @@ Once a page has it, runs regenerating that page must pass it again (they exit wi
 rather than silently stopping open tabs from reloading), or pass --auto-refresh 0 to turn it off.
 
 --serve starts a background HTTP server for ~/.claude/conversations on all interfaces (port 10041 by
-default; --port), unless it is already running, and prints http:// URLs instead of file:// ones.
-Their host is the address this machine was reached at over SSH (from $SSH_CONNECTION, so the link
-works from the SSH client's browser), else localhost. The server has no access control: anyone who
-can reach the port can read every rendered session. Pages viewed through it reload themselves as soon as
-they are regenerated, by any run (they ask the server every 2 s), and say so in their title line when
-the server cannot be reached. The server runs until --stop-server, or until it has gone 30 min with no
-page open and no `claude-conversation --watch` running. When a --watch run in a terminal ends (Ctrl+C),
-it asks whether to stop the server: anything but "n", including another Ctrl+C, stops it.
+default; --port), unless it is already running, and prints http:// URLs instead of file:// ones. Their
+host is the address this machine was reached at over SSH (from $SSH_CONNECTION, so the link works from
+the SSH client's browser), else localhost. The server has no access control: anyone who can reach the
+port can read every rendered session. Pages viewed through it reload themselves as soon as they are
+regenerated, by any run (they ask the server every 2 s). When the server cannot be reached, they say so
+below their title line, with the command (and directory) that started it, to restart it. The server
+runs until --stop-server, or until it has gone 30 min with no page open and no `claude-conversation
+--watch` running. When a --watch run in a terminal ends (Ctrl+C), it asks whether to stop the server:
+anything but "n", including another Ctrl+C, stops it.
 """
 from __future__ import annotations
 
@@ -53,6 +54,8 @@ import http.server
 import json
 import os
 import re
+import shlex
+import shutil
 import signal
 import socket
 import subprocess
@@ -253,7 +256,8 @@ ROOT_CSS = """
 @media(prefers-color-scheme:dark){:root{--ink:#e6edf3;--muted:#9da7b3;--line:#30363d;--bg:#0d1117;--soft:#161b22;--user:#2a2412}}
 header{font-size:.85em;padding:4px 12px;border-bottom:1px solid var(--line);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 header a{color:inherit;text-decoration:none} header a:hover{text-decoration:underline} header span{color:var(--muted);margin-left:10px}
-header #live{color:#d1242f}
+#live{font-size:.85em;padding:4px 12px;color:#d1242f;background:var(--soft);border-bottom:1px solid var(--line)}
+#live code{user-select:all;color:var(--ink);background:var(--bg);padding:1px 5px;border-radius:4px}
 """
 
 # Served pages (http) ask the server every 2 s whether the file has been regenerated since they were
@@ -265,14 +269,20 @@ LIVE_JS = """
  if(location.protocol==='file:'){if(refresh)setTimeout(()=>location.reload(),refresh*1000);return;}
  const v=document.querySelector('meta[name="VERSION_TAG"]').content;
  const tab=sessionStorage.ccTab||(sessionStorage.ccTab=Math.random().toString(36).slice(2));
- const live=document.getElementById('live');let timer,busy=false;
+ const live=document.getElementById('live');let timer,busy=false,restart='claude-conversation --serve';
+ function down(){   // the command comes from the server while it answered: the one that started it
+  live.textContent='server not reachable, so this page is not updating (the server stops itself after IDLE_MIN min '
+   +'with no page open and no --watch run; or the network may be down). To restart it, run: ';
+  const c=document.createElement('code');c.textContent=restart;live.append(c);live.hidden=false;}
  async function poll(){
   if(busy)return;busy=true;clearTimeout(timer);
   try{const r=await fetch('/_alive?'+new URLSearchParams({page:location.pathname,tab,v}),{cache:'no-store'});
    if(!r.ok)return;   // not served by this script: no live updates
-   if((await r.json()).reload)return location.reload();
-   live.textContent='';
-  }catch(e){live.textContent='server not reachable: no live updates (restart it with claude-conversation --serve)';}
+   const j=await r.json();
+   if(j.reload)return location.reload();
+   if(j.restart)restart=j.restart;
+   live.hidden=true;
+  }catch(e){down();}
   busy=false;timer=setTimeout(poll,2000);
  }
  document.addEventListener('visibilitychange',()=>{if(!document.hidden)poll();});
@@ -282,7 +292,7 @@ LIVE_JS = """
 
 
 def live_js(refresh: int) -> str:
-    return LIVE_JS.replace('REFRESH', str(int(refresh)))
+    return LIVE_JS.replace('REFRESH', str(int(refresh))).replace('IDLE_MIN', str(IDLE_TIMEOUT // 60))
 
 
 def version_meta() -> str:
@@ -306,7 +316,7 @@ def header_html(server: str | None, index_href: str | None = None) -> str:
     """
     title = f'<a href="{html.escape(index_href)}">claude conversations</a>' if index_href else 'claude conversations'
     meta = ([server] if server else []) + [f'generated {dt.datetime.now():%Y-%m-%d %H:%M:%S}']
-    return f'<header><b>{title}</b><span>{html.escape(" · ".join(meta))}</span><span id="live"></span></header>'
+    return f'<header><b>{title}</b><span>{html.escape(" · ".join(meta))}</span></header><div id="live" hidden></div>'
 
 
 CSS = ROOT_CSS + """
@@ -334,7 +344,12 @@ JS = """
 function flt(){const q=document.getElementById('q').value.toLowerCase();
  document.querySelectorAll('.turn').forEach(t=>{const h=q&&!t.innerText.toLowerCase().includes(q);t.classList.toggle('hidden',h);
   const a=document.querySelector('nav a[href="#'+t.id+'"]'); if(a) a.classList.toggle('hidden',h);});}
-function cp(id,btn){const el=document.getElementById(id);navigator.clipboard.writeText(el.dataset.raw).then(()=>{btn.textContent='copied';setTimeout(()=>btn.textContent='copy answer',1200);});}
+function cp(id,btn){const t=document.getElementById(id).dataset.raw;
+ const done=()=>{btn.textContent='copied';setTimeout(()=>btn.textContent='copy answer',1200);};
+ if(navigator.clipboard&&window.isSecureContext)return navigator.clipboard.writeText(t).then(done);
+ // no clipboard API over plain http to another machine (e.g. --serve over a VPN)
+ const a=document.createElement('textarea');a.value=t;a.style.position='fixed';a.style.opacity='0';
+ document.body.append(a);a.select();try{if(document.execCommand('copy'))done();}finally{a.remove();}}
 """
 
 
@@ -458,7 +473,7 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
                 srv.tabs[q.get('tab', '')] = dict(page=q.get('page', ''), client=self.client_address[0],
                     seen=time.monotonic(), version=q.get('v', ''))
             current = page_version(page)
-            return self.send_json({'reload': current is not None and current != q.get('v')})
+            return self.send_json({'reload': current is not None and current != q.get('v'), 'restart': srv.restart})
         if url.path == '/_status':
             return self.send_json({'tabs': open_tabs(srv), 'watch': watch_running()})
         super().do_GET()
@@ -520,6 +535,7 @@ def run_server(port: int) -> None:
     handler = functools.partial(QuietHandler, directory=str(OUT_ROOT))
     srv = http.server.ThreadingHTTPServer(('', port), handler)
     srv.tabs, srv.lock, srv.last_request = {}, threading.Lock(), time.monotonic()
+    srv.restart = os.environ.get('CLAUDE_CONVERSATION_RESTART', '')   # set by ensure_server()
     threading.Thread(target=stop_when_idle, args=(srv,), daemon=True).start()
     srv.serve_forever()
     pidfile = server_files(port)[0]
@@ -549,6 +565,17 @@ def server_files(port: int):
         Path.home() / '.claude' / f'conversation-server-{port}.log')
 
 
+def restart_command() -> str:
+    """A shell command repeating this run from the same directory (pages show it when the server
+    they came from is gone).
+    """
+    prog = sys.argv[0]
+    on_path = shutil.which(os.path.basename(prog))
+    if on_path and os.path.samefile(on_path, prog):
+        prog = os.path.basename(prog)
+    return f'cd {shlex.quote(os.getcwd())} && {shlex.join([prog, *sys.argv[1:]])}'
+
+
 def ensure_server(port: int) -> str:
     """Starts the background server on port unless it is running. Returns 'started' or 'running'."""
     status = server_status(port)
@@ -562,7 +589,8 @@ def ensure_server(port: int) -> str:
     # pipe of whatever ran it (e.g. Claude Code's `!`, which would otherwise wait for it)
     with logfile.open('w') as log:
         proc = subprocess.Popen([sys.executable, os.path.abspath(__file__), '--_server', str(port)],
-            stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True)
+            stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True,
+            env=dict(os.environ, CLAUDE_CONVERSATION_RESTART=restart_command()))
     for _ in range(50):
         if server_status(port) == 'ours':
             pidfile.write_text(f'{proc.pid}\n')
