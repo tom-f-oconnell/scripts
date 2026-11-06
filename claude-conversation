@@ -22,7 +22,9 @@ rewrites ~/.claude/conversations/index.html, which links every session page unde
 projects, grouped by project). Only one file:// URL is printed: the page's, or the index's if several
 sessions were rendered. With -v, one line per session is printed instead (HTML path, the session's
 name as `/resume` lists it, and its prompt count), then the index URL. --open uses xdg-open on each
-generated page, so it does nothing useful over SSH: open the printed URL instead.
+generated page, so it does nothing useful over SSH: open the printed URL instead. Each page starts with a
+title line, "claude conversations" (linking to the index from session pages), followed by when it was
+generated (so it advances under --watch) and, with --serve, the server's address, host name and pid.
 
 --serve starts a background HTTP server for ~/.claude/conversations on all interfaces (port 10041 by
 default; --port), unless it is already running, and prints http:// URLs instead of file:// ones.
@@ -42,6 +44,7 @@ import json
 import os
 import re
 import signal
+import socket
 import subprocess
 import sys
 import time
@@ -233,10 +236,22 @@ def md(text: str) -> str:
 ROOT_CSS = """
 :root{--ink:#1f2328;--muted:#57606a;--line:#d8dee4;--bg:#fff;--soft:#f6f8fa;--accent:#2a78d6;--user:#fff7e6}
 @media(prefers-color-scheme:dark){:root{--ink:#e6edf3;--muted:#9da7b3;--line:#30363d;--bg:#0d1117;--soft:#161b22;--user:#2a2412}}
+header{font-size:.85em;padding:4px 12px;border-bottom:1px solid var(--line);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+header a{color:inherit;text-decoration:none} header a:hover{text-decoration:underline} header span{color:var(--muted);margin-left:10px}
 """
 
+
+def header_html(server: str | None, index_href: str | None = None) -> str:
+    """The title line at the top of every page: "claude conversations" (linking to index_href, if
+    given), then, de-emphasized, the server description (when serving) and the generation time.
+    """
+    title = f'<a href="{html.escape(index_href)}">claude conversations</a>' if index_href else 'claude conversations'
+    meta = ([server] if server else []) + [f'generated {dt.datetime.now():%Y-%m-%d %H:%M:%S}']
+    return f'<header><b>{title}</b><span>{html.escape(" · ".join(meta))}</span></header>'
+
 CSS = ROOT_CSS + """
-body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 -apple-system,"Segoe UI",Helvetica,Arial,sans-serif;display:flex;height:100vh}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 -apple-system,"Segoe UI",Helvetica,Arial,sans-serif;display:flex;flex-direction:column;height:100vh}
+.cols{display:flex;flex:1;min-height:0}
 nav{width:340px;min-width:260px;border-right:1px solid var(--line);overflow:auto;padding:12px;box-sizing:border-box}
 nav input{width:100%;box-sizing:border-box;padding:6px 8px;margin-bottom:8px;border:1px solid var(--line);border-radius:6px;background:var(--soft);color:var(--ink)}
 nav a{display:block;padding:5px 6px;border-radius:6px;color:var(--ink);text-decoration:none;font-size:.88em;border-bottom:1px solid var(--line)}
@@ -263,7 +278,7 @@ function cp(id,btn){const el=document.getElementById(id);navigator.clipboard.wri
 """
 
 
-def render(turns, name: str, source: Path, project: Path, auto_refresh: int) -> str:
+def render(turns, name: str, source: Path, project: Path, auto_refresh: int, header: str) -> str:
     prompts = [t for t in turns if t['kind'] == 'prompt']
     n = len(prompts)
     title = f'{name} · Claude Code session {source.stem[:8]} ({project.name})'
@@ -302,16 +317,16 @@ def render(turns, name: str, source: Path, project: Path, auto_refresh: int) -> 
             f'{md(t["answer"]) if t["answer"] else "<p><i>(no final text; see the notes below)</i></p>"}</div>{inter}</section>')
     refresh = f'<meta http-equiv="refresh" content="{auto_refresh}">' if auto_refresh else ''
     return (f'<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">{meta}{refresh}<title>{html.escape(title)}</title>'
-        f'<style>{CSS}</style></head><body><nav><input id="q" placeholder="search prompts and answers" oninput="flt()">'
-        + '\n'.join(nav) + f'</nav><main><div class="meta">{html.escape(title)} · {n} prompts · source {html.escape(str(source))} · '
-        f'generated {dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")}</div>' + '\n'.join(body)
-        + f'</main><script>{JS}</script></body></html>')
+        f'<style>{CSS}</style></head><body>{header}<div class="cols"><nav><input id="q" placeholder="search prompts and answers" oninput="flt()">'
+        + '\n'.join(nav) + f'</nav><main><div class="meta">{html.escape(title)} · {n} prompts · source {html.escape(str(source))}</div>'
+        + '\n'.join(body) + f'</main></div><script>{JS}</script></body></html>')
 
 
 INDEX_CSS = ROOT_CSS + """
 body{margin:0 auto;max-width:1100px;padding:18px 28px 60px;background:var(--bg);color:var(--ink);font:15px/1.5 -apple-system,"Segoe UI",Helvetica,Arial,sans-serif}
 input{width:100%;box-sizing:border-box;padding:6px 8px;margin:6px 0 14px;border:1px solid var(--line);border-radius:6px;background:var(--soft);color:var(--ink)}
 h2{font-size:1em;color:var(--muted);margin:22px 0 4px;font-weight:normal} .meta{color:var(--muted);font-size:.85em}
+header{padding:0 0 4px;margin-bottom:12px}
 table{border-collapse:collapse;width:100%} th,td{border-bottom:1px solid var(--line);padding:4px 8px;text-align:left;vertical-align:top;font-size:.92em}
 th{color:var(--muted);font-weight:normal} td.n{text-align:right} a{color:var(--accent)} tr.hidden{display:none}
 """
@@ -326,9 +341,10 @@ def session_info(page: Path):
         return None
 
 
-def write_index():
+def write_index(header: str):
     """Writes OUT_ROOT/index.html linking every session page under OUT_ROOT, grouped by project
-    with the most recently active first. Returns (path, number of sessions, number of projects).
+    with the most recently active first, below header. Returns (path, number of sessions, number of
+    projects).
     """
     by_project = {}
     for page in OUT_ROOT.glob('*/*.html'):
@@ -348,9 +364,8 @@ def write_index():
         ".forEach(r=>r.classList.toggle('hidden',q&&!r.innerText.toLowerCase().includes(q)));}")
     out = OUT_ROOT / 'index.html'
     out.write_text(f'<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>Claude Code sessions</title>'
-        f'<style>{INDEX_CSS}</style></head><body><h1>Claude Code sessions</h1><div class="meta">{plural(n, "rendered session")} in '
-        f'{plural(len(by_project), "project")} · generated {dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")} · '
-        f'run claude-conversation (--all) in a project to add or refresh its sessions</div>'
+        f'<style>{INDEX_CSS}</style></head><body>{header}<div class="meta">{plural(n, "rendered session")} in '
+        f'{plural(len(by_project), "project")} · run claude-conversation (--all) in a project to add or refresh its sessions</div>'
         f'<input id="q" placeholder="filter sessions" oninput="flt()">' + '\n'.join(parts) + f'<script>{js}</script></body></html>')
     return out, n, len(by_project)
 
@@ -411,19 +426,26 @@ def ensure_server(port: int) -> str:
     sys.exit(f'could not start the server on port {port} (see {logfile})')
 
 
-def stop_server(port: int) -> str:
+def server_pid(port: int) -> int | None:
+    """pid of the server on port, from its pid file (None if missing or not this script's server)."""
     pidfile, _ = server_files(port)
     try:
         pid = int(pidfile.read_text())
-        is_ours = b'--_server' in Path(f'/proc/{pid}/cmdline').read_bytes()
+        if b'--_server' in Path(f'/proc/{pid}/cmdline').read_bytes():
+            return pid
     except (OSError, ValueError):
-        is_ours = False
-    if not is_ours:
+        pass
+    return None
+
+
+def stop_server(port: int) -> str:
+    pid = server_pid(port)
+    if pid is None:
         if server_status(port) == 'ours':
-            return f'server on port {port} has no valid pid file ({pidfile}): kill it by hand'
+            return f'server on port {port} has no valid pid file ({server_files(port)[0]}): kill it by hand'
         return f'no server running on port {port}'
     os.kill(pid, signal.SIGTERM)
-    pidfile.unlink()
+    server_files(port)[0].unlink()
     return f'stopped server on port {port} (pid {pid})'
 
 
@@ -432,6 +454,13 @@ def server_base(port: int) -> str:
     ssh = os.environ.get('SSH_CONNECTION', '').split()
     host = ssh[2] if len(ssh) == 4 else 'localhost'
     return f'http://{f"[{host}]" if ":" in host else host}:{port}'
+
+
+def server_description(port: int) -> str:
+    """Where the server on port is and its pid, for the pages' title line."""
+    pid = server_pid(port)
+    return (f'served from {server_base(port).removeprefix("http://")} on {socket.gethostname()} · '
+        f'server pid {pid if pid else "unknown"}')
 
 
 def url_for(path: Path, base: str | None) -> str:
@@ -489,10 +518,11 @@ def main() -> None:
         if not files:
             sys.exit('no matching session')
     refresh = args.watch or args.auto_refresh
-    base = None
+    base = server = None
     if args.serve:
         status = ensure_server(args.port)
         base = server_base(args.port)
+        server = server_description(args.port)
         if args.verbose:
             print(f'server {"started" if status == "started" else "already running"}: {base}/', flush=True)
     first_pass = True
@@ -506,11 +536,12 @@ def main() -> None:
                 name = (first[:60] + '...') if len(first) > 60 else first or '(empty session)'
             out = args.out if (args.out and len(files) == 1) else OUT_ROOT / slug / f'{f.stem}.html'
             out.parent.mkdir(parents=True, exist_ok=True)
-            out.write_text(render(turns, name, f, args.project.resolve(), refresh))
+            index_href = urllib.parse.quote(Path(os.path.relpath(OUT_ROOT / 'index.html', out.parent.resolve())).as_posix())
+            out.write_text(render(turns, name, f, args.project.resolve(), refresh, header_html(server, index_href)))
             outs.append(out)
             if args.verbose:
                 print(f'{url_for(out, base) if base else out}  "{name}"  ({plural(len(prompts), "prompt")})', flush=True)
-        index, n_sessions, n_projects = write_index()
+        index, n_sessions, n_projects = write_index(header_html(server))
         if args.verbose:
             print(f'index of all rendered sessions: {url_for(index, base)}  ({plural(n_sessions, "session")} in {plural(n_projects, "project")})', flush=True)
         elif first_pass:   # the URLs do not change between --watch passes
