@@ -12,34 +12,35 @@ Usage (from the project directory, e.g. with Claude Code's `!` prefix, whose out
 conversation's context; with respondToBashCommands false in settings.json Claude does not reply to it):
     claude-conversation                 # latest session of this directory -> HTML, prints its file:// URL
     claude-conversation --open          # ... and open it in the browser
-    claude-conversation --open --auto-refresh 30   # page reloads itself every 30 s (see below)
     claude-conversation --session <id-prefix> | --jsonl <file> | --all   # other sessions
-    claude-conversation --watch 20 --open   # regenerate every 20 s until Ctrl+C (with auto-refresh)
+    claude-conversation --watch 20 --open   # regenerate every 20 s until Ctrl+C
     claude-conversation --serve         # ... and print an http:// URL instead (see below)
     claude-conversation --stop-server
 Output: ~/.claude/conversations/<project-slug>/<session-id>.html (override with --out), and next to it
-<session-id>.search.js (its prompts and answers, for the index's search). Every run also rewrites
-~/.claude/conversations/index.html, which links every session page under that directory (all projects,
-grouped by project); its search box searches all their prompts and answers, listing the matches under
-each session. When a session page's search has no match, it lists the other sessions that have one,
-linking to the same search there (from ~/.claude/conversations/sessions.js, also rewritten every run). Only one file:// URL is printed: the page's, or the index's if several
-sessions were rendered. With -v, one line per session is printed instead (HTML path, the session's
-name as `/resume` lists it, and its prompt count), then the index URL. --open uses xdg-open on each
-generated page, so it does nothing useful over SSH: open the printed URL instead. Each page starts with a
-title line, "claude conversations" (linking to the index from session pages), followed by when it was
-generated (so it advances under --watch) and, with --serve, the server's address, host name and pid.
+<session-id>.search.js (its prompts and answers, for searches) and <session-id>.version.js. Every run
+also rewrites ~/.claude/conversations/index.html, which links every session page under that directory
+(all projects, grouped by project); its search box searches all their prompts and answers, listing the
+matches under each session. When a session page's search has no match, it lists the other sessions that
+have one, linking to the same search there (from ~/.claude/conversations/sessions.js, also rewritten
+every run). Only one file:// URL is printed: the page's, or the index's if several sessions were
+rendered. With -v, one line per session is printed instead (HTML path, the session's name as `/resume`
+lists it, and its prompt count), then the index URL. --open uses xdg-open on each generated page, so it
+does nothing useful over SSH: open the printed URL instead. Each page starts with a title line, "claude
+conversations" (linking to the index from session pages), followed by when it was generated and, with
+--serve, the server's address, host name and pid.
 
---auto-refresh is for pages opened as file:// URLs that something other than --watch regenerates: you
-re-running the command, or e.g. a Claude Code Stop hook (pages viewed through --serve need no flag).
-Once a page has it, runs regenerating that page must pass it again (they exit with an error otherwise,
-rather than silently stopping open tabs from reloading), or pass --auto-refresh 0 to turn it off.
+Open pages, served or opened as files, check every 2 s whether they have been regenerated (by any run:
+--watch, a re-run, or e.g. a Claude Code Stop hook). The generation time in their title line follows
+along, and when the content has changed they reload, unless a search is in progress (text in the search
+box, or the cursor in it): then a notice with a reload button says the page has changed, and it reloads
+once the box is empty and left. A page's version is a hash of its content (apart from the title line),
+so regenerating it unchanged does not reload it.
 
 --serve starts a background HTTP server for ~/.claude/conversations on all interfaces (port 10041 by
 default; --port), unless it is already running, and prints http:// URLs instead of file:// ones. Their
 host is the address this machine was reached at over SSH (from $SSH_CONNECTION, so the link works from
 the SSH client's browser), else localhost. The server has no access control: anyone who can reach the
-port can read every rendered session. Pages viewed through it reload themselves as soon as they are
-regenerated, by any run (they ask the server every 2 s). When the server cannot be reached, they say so
+port can read every rendered session. When the server cannot be reached, pages viewed through it say so
 below their title line, with the command (and directory) that started it, to restart it. The server
 runs until --stop-server, or until it has gone 30 min with no page open and no `claude-conversation
 --watch` running. When a --watch run in a terminal ends (Ctrl+C), it asks whether to stop the server:
@@ -51,6 +52,7 @@ import argparse
 import atexit
 import datetime as dt
 import functools
+import hashlib
 import html
 import http.client
 import http.server
@@ -75,6 +77,9 @@ SERVER_PORT = 10041
 IDLE_TIMEOUT = 30 * 60   # the server stops itself after this long with no page open and no --watch run
 TAB_TIMEOUT = 3 * 60     # a tab counts as open while it has asked within this long (hidden tabs ask less often)
 VERSION_TAG = 'claude-conversation-version'
+GENERATED_TAG = 'claude-conversation-generated'
+# filled in by write_page(), after hashing the rest of the page for its version
+VERSION_SLOT, GENERATED_SLOT = '\0version\0', '\0generated\0'
 TAGS_NOT_PROMPT = ('<task-notification', '<system-reminder', '<local-command', '<command-name',
     '<bash-input', '<bash-stdout', '<bash-stderr', 'Another Claude session sent a message',
     '[Image:', 'Base directory for this skill', '<agent-message')
@@ -265,58 +270,99 @@ ROOT_CSS = """
 @media(prefers-color-scheme:dark){:root{--ink:#e6edf3;--muted:#9da7b3;--line:#30363d;--bg:#0d1117;--soft:#161b22;--user:#2a2412}}
 header{font-size:.85em;padding:4px 12px;border-bottom:1px solid var(--line);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 header a{color:inherit;text-decoration:none} header a:hover{text-decoration:underline} header span{color:var(--muted);margin-left:10px}
-#live{font-size:.85em;padding:4px 12px;color:#d1242f;background:var(--soft);border-bottom:1px solid var(--line)}
+#live{font-size:.85em;padding:4px 12px;background:var(--soft);border-bottom:1px solid var(--line)} #live.down{color:#d1242f}
 #live code{user-select:all;color:var(--ink);background:var(--bg);padding:1px 5px;border-radius:4px}
+#live button{font-size:1em;padding:0 8px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--ink);cursor:pointer}
 """
 
-# Served pages (http) ask the server every 2 s whether the file has been regenerated since they were
-# loaded, and reload if so; that is also how the server knows which pages are open. Pages opened as
-# files reload every REFRESH seconds instead, if not 0.
+# Pages check every 2 s for the version of their file: served pages (http) by asking the server (which
+# is also how it knows which pages are open), pages opened as files by loading <page>.version.js. The
+# generation time in the title line follows along; a new version reloads the page, unless a search is
+# in progress, in which case a notice says so and the reload waits until the search box is empty and left.
 LIVE_JS = """
 (function(){
- const refresh=REFRESH;
- if(location.protocol==='file:'){if(refresh)setTimeout(()=>location.reload(),refresh*1000);return;}
- const v=document.querySelector('meta[name="VERSION_TAG"]').content;
- const tab=sessionStorage.ccTab||(sessionStorage.ccTab=Math.random().toString(36).slice(2));
- const live=document.getElementById('live');let timer,busy=false,restart='claude-conversation --serve';
- function down(){   // the command comes from the server while it answered: the one that started it
-  live.textContent='server not reachable, so this page is not updating (the server stops itself after IDLE_MIN min '
-   +'with no page open and no --watch run; or the network may be down). To restart it, run: ';
-  const c=document.createElement('code');c.textContent=restart;live.append(c);live.hidden=false;}
- async function poll(){
-  if(busy)return;busy=true;clearTimeout(timer);
-  try{const r=await fetch('/_alive?'+new URLSearchParams({page:location.pathname,tab,v}),{cache:'no-store'});
-   if(!r.ok)return;   // not served by this script: no live updates
-   const j=await r.json();
-   if(j.reload)return location.reload();
-   if(j.restart)restart=j.restart;
-   live.hidden=true;
-  }catch(e){down();}
-  busy=false;timer=setTimeout(poll,2000);
+ const V=document.querySelector('meta[name="VERSION_TAG"]').content,Q=document.getElementById('q');
+ const live=document.getElementById('live'),gen=document.getElementById('gen');
+ let stale=false,down=false,latest,restart='claude-conversation --serve',timer,busy=false;
+ const searching=()=>Q&&(Q.value.trim()!==''||document.activeElement===Q),key='ccReloadFor'+location.pathname;
+ function reload(){try{sessionStorage[key]=latest;}catch(e){}location.reload();}
+ function show(){   // the notice under the title line: server gone, else page changed during a search
+  live.textContent='';live.className=down?'down':'';live.hidden=!down&&!stale;
+  if(down){   // the command comes from the server while it answered: the one that started it
+   live.append('server not reachable, so this page is not updating (the server stops itself after IDLE_MIN min '
+    +'with no page open and no --watch run; or the network may be down). To restart it, run: ');
+   const c=document.createElement('code');c.textContent=restart;live.append(c);}
+  else if(stale){live.append('This page has changed since it was loaded. ');
+   const b=document.createElement('button');b.textContent='reload';b.onclick=reload;live.append(b);}}
+ function seen(version,generated){   // the version and generation time of the page's file now
+  if(generated&&gen)gen.textContent=generated;
+  if(!version||version===V)return;
+  latest=version;let tried;try{tried=sessionStorage[key];}catch(e){}
+  // a reload that did not bring this version (e.g. a stale cache) is not repeated, so it cannot loop
+  if(!searching()&&tried!==version)return reload();
+  if(!stale){stale=true;show();}}
+ if(Q){const idle=()=>{let tried;try{tried=sessionStorage[key];}catch(e){}if(stale&&!searching()&&tried!==latest)reload();};Q.addEventListener('input',idle);Q.addEventListener('blur',idle);}
+ let check;
+ if(location.protocol==='file:'){
+  const src=location.href.split(/[?#]/)[0].replace(/[.]html$/,'.version.js');
+  window.ccVersion=seen;
+  check=()=>{const s=document.createElement('script');s.src=src+'?t='+Date.now();s.onload=s.onerror=()=>s.remove();document.head.append(s);};
+  setInterval(check,2000);
+ }else{
+  const tab=sessionStorage.ccTab||(sessionStorage.ccTab=Math.random().toString(36).slice(2));
+  check=async function(){
+   if(busy)return;busy=true;clearTimeout(timer);
+   try{const r=await fetch('/_alive?'+new URLSearchParams({page:location.pathname,tab,v:V}),{cache:'no-store'});
+    if(!r.ok)return;   // not served by this script: no updates
+    const j=await r.json();if(j.restart)restart=j.restart;
+    if(down){down=false;show();}
+    seen(j.version,j.generated);
+   }catch(e){if(!down){down=true;show();}}
+   busy=false;timer=setTimeout(check,2000);};
+  check();
  }
- document.addEventListener('visibilitychange',()=>{if(!document.hidden)poll();});
- poll();
+ document.addEventListener('visibilitychange',()=>{if(!document.hidden)check();});
 })();
 """.replace('VERSION_TAG', VERSION_TAG)
 
 
-def live_js(refresh: int) -> str:
-    return LIVE_JS.replace('REFRESH', str(int(refresh))).replace('IDLE_MIN', str(IDLE_TIMEOUT // 60))
+def live_js() -> str:
+    return LIVE_JS.replace('IDLE_MIN', str(IDLE_TIMEOUT // 60))
 
 
-def version_meta() -> str:
-    """A tag identifying this generation of a page, for page_version()."""
-    return f'<meta name="{VERSION_TAG}" content="{time.time_ns()}">'
+def stamp_meta() -> str:
+    """Tags for the page's version and generation time (both filled in by write_page())."""
+    return f'<meta name="{VERSION_TAG}" content="{VERSION_SLOT}"><meta name="{GENERATED_TAG}" content="{GENERATED_SLOT}">'
 
 
-def page_version(path: Path) -> str | None:
-    """The generation of the page at path (from its version_meta()), None if missing or not a page."""
+def page_stamp(path: Path) -> tuple:
+    """(version, generation time) of the page at path, from its stamp_meta() ((None, None) if missing)."""
     try:
         with path.open(errors='replace') as f:
-            m = re.search(f'<meta name="{VERSION_TAG}" content="([^"]*)">', f.read(2000))
+            head = f.read(2000)
     except OSError:
-        return None
-    return m.group(1) if m else None
+        return None, None
+    tags = [re.search(f'<meta name="{t}" content="([^"]*)">', head) for t in (VERSION_TAG, GENERATED_TAG)]
+    return tuple(m.group(1) if m else None for m in tags)
+
+
+def write_atomic(path: Path, text: str) -> None:
+    """Writes path through a temporary file, so open pages never load it half written."""
+    tmp = path.with_name(f'.{path.name}.tmp')
+    tmp.write_text(text)
+    os.replace(tmp, path)
+
+
+def write_page(path: Path, page: str) -> None:
+    """Writes page (from render() or for the index) to path, with its version (a hash of its content
+    apart from the title line, whose server description and generation time change without the content
+    doing so) and generation time filled in, and both to <path>.version.js, which pages opened as files
+    load to check for new versions.
+    """
+    version = hashlib.sha1(re.sub('<header>.*?</header>', '', page, count=1).encode()).hexdigest()[:16]
+    now = f'{dt.datetime.now():%Y-%m-%d %H:%M:%S}'
+    write_atomic(path, page.replace(VERSION_SLOT, version).replace(GENERATED_SLOT, now))
+    write_atomic(path.with_suffix('.version.js'), f'ccVersion({json.dumps(version)},{json.dumps(now)});\n')
 
 
 def header_html(server: str | None, index_href: str | None = None) -> str:
@@ -324,8 +370,9 @@ def header_html(server: str | None, index_href: str | None = None) -> str:
     given), then, de-emphasized, the server description (when serving) and the generation time.
     """
     title = f'<a href="{html.escape(index_href)}">claude conversations</a>' if index_href else 'claude conversations'
-    meta = ([server] if server else []) + [f'generated {dt.datetime.now():%Y-%m-%d %H:%M:%S}']
-    return f'<header><b>{title}</b><span>{html.escape(" · ".join(meta))}</span></header><div id="live" hidden></div>'
+    server = f'{html.escape(server)} · ' if server else ''
+    return (f'<header><b>{title}</b><span>{server}generated <time id="gen">{GENERATED_SLOT}</time></span></header>'
+        '<div id="live" hidden></div>')
 
 
 CSS = ROOT_CSS + """
@@ -421,19 +468,14 @@ def search_js(turns, session: str) -> str:
     return f'ccSearch({json.dumps({"session": session, "turns": rows})});\n'
 
 
-def render(turns, name: str, source: Path, project: Path, refresh: int, header: str, auto_refresh: int,
-        root: str) -> str:
-    """The session page. Opened as a file, it reloads itself every refresh seconds (if not 0). It
-    records auto_refresh (the --auto-refresh interval later runs must repeat) in its metadata. root is
-    the URL of OUT_ROOT relative to the page.
-    """
+def render(turns, name: str, source: Path, project: Path, header: str, root: str) -> str:
+    """The session page (for write_page()). root is the URL of OUT_ROOT relative to the page."""
     prompts = [t for t in turns if t['kind'] == 'prompt']
     n = len(prompts)
     title = f'{name} · Claude Code session {source.stem[:8]} ({project.name})'
     # metadata for the index page and later runs, kept near the top of the file so it is cheap to read back
     info = dict(project=str(project), session=source.stem, name=name, prompts=n,
-        first=prompts[0]['time'] if prompts else '', last=prompts[-1]['time'] if prompts else '',
-        auto_refresh=auto_refresh)
+        first=prompts[0]['time'] if prompts else '', last=prompts[-1]['time'] if prompts else '')
     meta = f'<meta name="claude-conversation" content="{html.escape(json.dumps(info), quote=True)}">'
     nav, body = [], []
     for i, (t, label) in enumerate(zip(turns, turn_labels(turns))):
@@ -458,11 +500,11 @@ def render(turns, name: str, source: Path, project: Path, refresh: int, header: 
             f'<div class="prompt"><div class="k">{label} · {t["time"]}</div>{prompt_html}</div>'
             f'<div class="answer" id="a{i}" data-raw="{raw}"><button class="copy" onclick="cp(\'a{i}\',this)">copy answer</button>'
             f'{md(t["answer"]) if t["answer"] else "<p><i>(no final text; see the notes below)</i></p>"}</div>{inter}</section>')
-    return (f'<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">{version_meta()}{meta}<title>{html.escape(title)}</title>'
+    return (f'<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">{stamp_meta()}{meta}<title>{html.escape(title)}</title>'
         f'<style>{CSS}</style></head><body data-root="{html.escape(root)}" data-session="{html.escape(source.stem)}">'
         f'{header}<div class="cols"><nav><input id="q" placeholder="search prompts and answers" oninput="flt()">'
         + '\n'.join(nav) + f'</nav><main><div class="meta">{html.escape(title)} · {n} prompts · source {html.escape(str(source))}</div>'
-        '<div id="others" hidden></div>' + '\n'.join(body) + f'</main></div><script>{SEARCH_JS}{JS}{live_js(refresh)}</script></body></html>')
+        '<div id="others" hidden></div>' + '\n'.join(body) + f'</main></div><script>{SEARCH_JS}{JS}{live_js()}</script></body></html>')
 
 
 INDEX_CSS = ROOT_CSS + """
@@ -521,7 +563,7 @@ def write_index(header: str):
         info = session_info(page)
         if info:
             info['href'] = str(page.relative_to(OUT_ROOT))
-            info['search'] = f'{page.relative_to(OUT_ROOT).with_suffix(".search.js")}?v={page_version(page) or ""}'
+            info['search'] = f'{page.relative_to(OUT_ROOT).with_suffix(".search.js")}?v={page_stamp(page)[0] or ""}'
             by_project.setdefault(info['project'], []).append(info)
     parts = []
     for project, infos in sorted(by_project.items(), key=lambda kv: max(i['last'] for i in kv[1]), reverse=True):
@@ -534,16 +576,16 @@ def write_index(header: str):
             f'<th>first prompt</th><th>last prompt</th><th>id</th></tr>{rows}</table>')
     n = sum(len(v) for v in by_project.values())
     out = OUT_ROOT / 'index.html'
-    out.write_text(f'<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">{version_meta()}<title>Claude Code sessions</title>'
+    write_page(out, f'<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">{stamp_meta()}<title>Claude Code sessions</title>'
         f'<style>{INDEX_CSS}</style></head><body>{header}<div class="meta">{plural(n, "rendered session")} in '
         f'{plural(len(by_project), "project")} · run claude-conversation (--all) in a project to add or refresh its sessions</div>'
         f'<input id="q" placeholder="search all prompts and answers (and session names)" oninput="flt()">' + '\n'.join(parts)
-        + f'<script>{SEARCH_JS}{INDEX_JS}{live_js(0)}</script></body></html>')
+        + f'<script>{SEARCH_JS}{INDEX_JS}{live_js()}</script></body></html>')
     # the session list for session pages' searches of the other sessions
     sessions = [{k: i[k] for k in ('session', 'name', 'project', 'href', 'search')}
         for _, infos in sorted(by_project.items(), key=lambda kv: max(i['last'] for i in kv[1]), reverse=True)
         for i in sorted(infos, key=lambda i: i['last'], reverse=True)]
-    (OUT_ROOT / 'sessions.js').write_text(f'ccSessions({json.dumps(sessions)});\n')
+    write_atomic(OUT_ROOT / 'sessions.js', f'ccSessions({json.dumps(sessions)});\n')
     return out, n, len(by_project)
 
 
@@ -555,6 +597,10 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
 
     def log_message(self, *args):
         pass
+
+    def end_headers(self):
+        self.send_header('Cache-Control', 'no-cache')   # always revalidate: pages must not come from a stale cache
+        super().end_headers()
 
     def do_GET(self):
         srv = self.server
@@ -569,8 +615,8 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
             with srv.lock:
                 srv.tabs[q.get('tab', '')] = dict(page=q.get('page', ''), client=self.client_address[0],
                     seen=time.monotonic(), version=q.get('v', ''))
-            current = page_version(page)
-            return self.send_json({'reload': current is not None and current != q.get('v'), 'restart': srv.restart})
+            version, generated = page_stamp(page)
+            return self.send_json({'version': version, 'generated': generated, 'restart': srv.restart})
         if url.path == '/_status':
             return self.send_json({'tabs': open_tabs(srv), 'watch': watch_running()})
         super().do_GET()
@@ -580,7 +626,6 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
         self.send_response(200)
         self.send_header('Content-Type', 'application/json')
         self.send_header('Content-Length', str(len(body)))
-        self.send_header('Cache-Control', 'no-store')
         self.end_headers()
         self.wfile.write(body)
 
@@ -816,11 +861,7 @@ def main() -> None:
     ap.add_argument('--all', action='store_true', help='render every session of the project')
     ap.add_argument('--out', type=Path, help='output HTML path (single session)')
     ap.add_argument('--open', action='store_true', help='open the page in the browser (xdg-open)')
-    ap.add_argument('--auto-refresh', type=int, metavar='SEC',
-        help='opened as a file, the page reloads itself every SEC seconds, to show regenerations by other runs '
-        '(e.g. you re-running the command, or a Claude Code Stop hook; pages viewed through --serve reload when '
-        'regenerated, without this); 0 removes that from a page')
-    ap.add_argument('--watch', type=int, default=0, metavar='SEC', help='regenerate every SEC seconds (implies --auto-refresh SEC)')
+    ap.add_argument('--watch', type=int, default=0, metavar='SEC', help='regenerate every SEC seconds until Ctrl+C')
     ap.add_argument('--serve', action='store_true',
         help='start a background HTTP server for the pages (unless running) and print http:// URLs')
     ap.add_argument('--port', type=int, default=SERVER_PORT, help=f'port for --serve (default: {SERVER_PORT})')
@@ -849,17 +890,6 @@ def main() -> None:
         if not files:
             sys.exit('no matching session')
     outs = [args.out if (args.out and len(files) == 1) else OUT_ROOT / slug / f'{f.stem}.html' for f in files]
-    # open tabs of a page generated with --auto-refresh would silently stop reloading if a run without
-    # it regenerated the page, so such runs are refused (--watch reloads them itself)
-    previous = [(session_info(out) or {}).get('auto_refresh', 0) for out in outs]
-    if args.auto_refresh is None and not args.watch and any(previous):
-        stale = [(sec, out) for sec, out in zip(previous, outs) if sec]
-        sec, out = stale[0]
-        others = f' (and {plural(len(stale) - 1, "other page")})' if len(stale) > 1 else ''
-        sys.exit(f'{out}{others} was generated with --auto-refresh {sec}: pass --auto-refresh {sec} again to '
-            'keep it reloading itself in open tabs, or --auto-refresh 0 to turn that off')
-    keep_refresh = [sec if args.auto_refresh is None else args.auto_refresh for sec in previous]
-    refresh = args.watch or args.auto_refresh or 0
     base = server = None
     if args.serve:
         status = ensure_server(args.port)
@@ -871,7 +901,7 @@ def main() -> None:
     first_pass = True
     try:
         while True:
-            for f, out, keep in zip(files, outs, keep_refresh):
+            for f, out in zip(files, outs):
                 turns, name = build_turns(f)
                 prompts = [t for t in turns if t['kind'] == 'prompt']
                 if not name:   # untitled: fall back to the start of the first prompt
@@ -879,8 +909,8 @@ def main() -> None:
                     name = (first[:60] + '...') if len(first) > 60 else first or '(empty session)'
                 out.parent.mkdir(parents=True, exist_ok=True)
                 index_href = urllib.parse.quote(Path(os.path.relpath(OUT_ROOT / 'index.html', out.parent.resolve())).as_posix())
-                out.with_suffix('.search.js').write_text(search_js(turns, f.stem))
-                out.write_text(render(turns, name, f, args.project.resolve(), refresh, header_html(server, index_href), keep,
+                write_atomic(out.with_suffix('.search.js'), search_js(turns, f.stem))
+                write_page(out, render(turns, name, f, args.project.resolve(), header_html(server, index_href),
                     index_href.removesuffix('index.html')))
                 if args.verbose:
                     print(f'{url_for(out, base) if base else out}  "{name}"  ({plural(len(prompts), "prompt")})', flush=True)
