@@ -26,18 +26,20 @@ generated page, so it does nothing useful over SSH: open the printed URL instead
 title line, "claude conversations" (linking to the index from session pages), followed by when it was
 generated (so it advances under --watch) and, with --serve, the server's address, host name and pid.
 
---auto-refresh is for pages that something other than --watch regenerates: you re-running the command,
-or e.g. a Claude Code Stop hook. Once a page has it, runs regenerating that page must pass it again
-(they exit with an error otherwise, rather than silently stopping open tabs from reloading), or pass
---auto-refresh 0 to turn it off.
+--auto-refresh is for pages opened as file:// URLs that something other than --watch regenerates: you
+re-running the command, or e.g. a Claude Code Stop hook (pages viewed through --serve need no flag).
+Once a page has it, runs regenerating that page must pass it again (they exit with an error otherwise,
+rather than silently stopping open tabs from reloading), or pass --auto-refresh 0 to turn it off.
 
 --serve starts a background HTTP server for ~/.claude/conversations on all interfaces (port 10041 by
 default; --port), unless it is already running, and prints http:// URLs instead of file:// ones.
 Their host is the address this machine was reached at over SSH (from $SSH_CONNECTION, so the link
 works from the SSH client's browser), else localhost. The server has no access control: anyone who
-can reach the port can read every rendered session. It runs until --stop-server. When a --watch run in
-a terminal ends (Ctrl+C), it asks whether to stop the server: anything but "n", including another
-Ctrl+C, stops it.
+can reach the port can read every rendered session. Pages viewed through it reload themselves as soon as
+they are regenerated, by any run (they ask the server every 2 s), and say so in their title line when
+the server cannot be reached. The server runs until --stop-server, or until it has gone 30 min with no
+page open and no `claude-conversation --watch` running. When a --watch run in a terminal ends (Ctrl+C),
+it asks whether to stop the server: anything but "n", including another Ctrl+C, stops it.
 """
 from __future__ import annotations
 
@@ -55,13 +57,18 @@ import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
 import urllib.parse
+import urllib.request
 from pathlib import Path
 
 PROJECTS = Path.home() / '.claude' / 'projects'
 OUT_ROOT = Path.home() / '.claude' / 'conversations'
 SERVER_PORT = 10041
+IDLE_TIMEOUT = 30 * 60   # the server stops itself after this long with no page open and no --watch run
+TAB_TIMEOUT = 3 * 60     # a tab counts as open while it has asked within this long (hidden tabs ask less often)
+VERSION_TAG = 'claude-conversation-version'
 TAGS_NOT_PROMPT = ('<task-notification', '<system-reminder', '<local-command', '<command-name',
     '<bash-input', '<bash-stdout', '<bash-stderr', 'Another Claude session sent a message',
     '[Image:', 'Base directory for this skill', '<agent-message')
@@ -246,7 +253,51 @@ ROOT_CSS = """
 @media(prefers-color-scheme:dark){:root{--ink:#e6edf3;--muted:#9da7b3;--line:#30363d;--bg:#0d1117;--soft:#161b22;--user:#2a2412}}
 header{font-size:.85em;padding:4px 12px;border-bottom:1px solid var(--line);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 header a{color:inherit;text-decoration:none} header a:hover{text-decoration:underline} header span{color:var(--muted);margin-left:10px}
+header #live{color:#d1242f}
 """
+
+# Served pages (http) ask the server every 2 s whether the file has been regenerated since they were
+# loaded, and reload if so; that is also how the server knows which pages are open. Pages opened as
+# files reload every REFRESH seconds instead, if not 0.
+LIVE_JS = """
+(function(){
+ const refresh=REFRESH;
+ if(location.protocol==='file:'){if(refresh)setTimeout(()=>location.reload(),refresh*1000);return;}
+ const v=document.querySelector('meta[name="VERSION_TAG"]').content;
+ const tab=sessionStorage.ccTab||(sessionStorage.ccTab=Math.random().toString(36).slice(2));
+ const live=document.getElementById('live');let timer,busy=false;
+ async function poll(){
+  if(busy)return;busy=true;clearTimeout(timer);
+  try{const r=await fetch('/_alive?'+new URLSearchParams({page:location.pathname,tab,v}),{cache:'no-store'});
+   if(!r.ok)return;   // not served by this script: no live updates
+   if((await r.json()).reload)return location.reload();
+   live.textContent='';
+  }catch(e){live.textContent='server not reachable: no live updates (restart it with claude-conversation --serve)';}
+  busy=false;timer=setTimeout(poll,2000);
+ }
+ document.addEventListener('visibilitychange',()=>{if(!document.hidden)poll();});
+ poll();
+})();
+""".replace('VERSION_TAG', VERSION_TAG)
+
+
+def live_js(refresh: int) -> str:
+    return LIVE_JS.replace('REFRESH', str(int(refresh)))
+
+
+def version_meta() -> str:
+    """A tag identifying this generation of a page, for page_version()."""
+    return f'<meta name="{VERSION_TAG}" content="{time.time_ns()}">'
+
+
+def page_version(path: Path) -> str | None:
+    """The generation of the page at path (from its version_meta()), None if missing or not a page."""
+    try:
+        with path.open(errors='replace') as f:
+            m = re.search(f'<meta name="{VERSION_TAG}" content="([^"]*)">', f.read(2000))
+    except OSError:
+        return None
+    return m.group(1) if m else None
 
 
 def header_html(server: str | None, index_href: str | None = None) -> str:
@@ -255,7 +306,8 @@ def header_html(server: str | None, index_href: str | None = None) -> str:
     """
     title = f'<a href="{html.escape(index_href)}">claude conversations</a>' if index_href else 'claude conversations'
     meta = ([server] if server else []) + [f'generated {dt.datetime.now():%Y-%m-%d %H:%M:%S}']
-    return f'<header><b>{title}</b><span>{html.escape(" · ".join(meta))}</span></header>'
+    return f'<header><b>{title}</b><span>{html.escape(" · ".join(meta))}</span><span id="live"></span></header>'
+
 
 CSS = ROOT_CSS + """
 body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 -apple-system,"Segoe UI",Helvetica,Arial,sans-serif;display:flex;flex-direction:column;height:100vh}
@@ -287,8 +339,8 @@ function cp(id,btn){const el=document.getElementById(id);navigator.clipboard.wri
 
 
 def render(turns, name: str, source: Path, project: Path, refresh: int, header: str, auto_refresh: int) -> str:
-    """The session page. It reloads itself every refresh seconds (if not 0), and records auto_refresh
-    (the --auto-refresh interval later runs must repeat) in its metadata.
+    """The session page. Opened as a file, it reloads itself every refresh seconds (if not 0). It
+    records auto_refresh (the --auto-refresh interval later runs must repeat) in its metadata.
     """
     prompts = [t for t in turns if t['kind'] == 'prompt']
     n = len(prompts)
@@ -327,11 +379,10 @@ def render(turns, name: str, source: Path, project: Path, refresh: int, header: 
             f'<div class="prompt"><div class="k">{label} · {t["time"]}</div>{prompt_html}</div>'
             f'<div class="answer" id="a{i}" data-raw="{raw}"><button class="copy" onclick="cp(\'a{i}\',this)">copy answer</button>'
             f'{md(t["answer"]) if t["answer"] else "<p><i>(no final text; see the notes below)</i></p>"}</div>{inter}</section>')
-    refresh = f'<meta http-equiv="refresh" content="{refresh}">' if refresh else ''
-    return (f'<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">{meta}{refresh}<title>{html.escape(title)}</title>'
+    return (f'<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">{version_meta()}{meta}<title>{html.escape(title)}</title>'
         f'<style>{CSS}</style></head><body>{header}<div class="cols"><nav><input id="q" placeholder="search prompts and answers" oninput="flt()">'
         + '\n'.join(nav) + f'</nav><main><div class="meta">{html.escape(title)} · {n} prompts · source {html.escape(str(source))}</div>'
-        + '\n'.join(body) + f'</main></div><script>{JS}</script></body></html>')
+        + '\n'.join(body) + f'</main></div><script>{JS}{live_js(refresh)}</script></body></html>')
 
 
 INDEX_CSS = ROOT_CSS + """
@@ -377,24 +428,106 @@ def write_index(header: str):
     js = ("function flt(){const q=document.getElementById('q').value.toLowerCase();document.querySelectorAll('tr[data-s]')"
         ".forEach(r=>r.classList.toggle('hidden',q&&!r.innerText.toLowerCase().includes(q)));}")
     out = OUT_ROOT / 'index.html'
-    out.write_text(f'<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>Claude Code sessions</title>'
+    out.write_text(f'<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">{version_meta()}<title>Claude Code sessions</title>'
         f'<style>{INDEX_CSS}</style></head><body>{header}<div class="meta">{plural(n, "rendered session")} in '
         f'{plural(len(by_project), "project")} · run claude-conversation (--all) in a project to add or refresh its sessions</div>'
-        f'<input id="q" placeholder="filter sessions" oninput="flt()">' + '\n'.join(parts) + f'<script>{js}</script></body></html>')
+        f'<input id="q" placeholder="filter sessions" oninput="flt()">' + '\n'.join(parts) + f'<script>{js}{live_js(0)}</script></body></html>')
     return out, n, len(by_project)
 
 
 class QuietHandler(http.server.SimpleHTTPRequestHandler):
+    """Serves OUT_ROOT, plus /_alive, which open pages ask whether they have been regenerated (and
+    which tells the server they are open), and /_status (the open tabs, for the command line).
+    """
     server_version = 'claude-conversation'   # lets server_status() recognize its own server
 
     def log_message(self, *args):
         pass
 
+    def do_GET(self):
+        srv = self.server
+        url = urllib.parse.urlsplit(self.path)
+        if url.path != '/_status':   # the command line asking does not keep the server up
+            srv.last_request = time.monotonic()
+        if url.path == '/_alive':
+            q = dict(urllib.parse.parse_qsl(url.query))
+            page = Path(self.translate_path(q.get('page', '/')))
+            if page.is_dir():
+                page /= 'index.html'
+            with srv.lock:
+                srv.tabs[q.get('tab', '')] = dict(page=q.get('page', ''), client=self.client_address[0],
+                    seen=time.monotonic(), version=q.get('v', ''))
+            current = page_version(page)
+            return self.send_json({'reload': current is not None and current != q.get('v')})
+        if url.path == '/_status':
+            return self.send_json({'tabs': open_tabs(srv), 'watch': watch_running()})
+        super().do_GET()
+
+    def send_json(self, obj) -> None:
+        body = json.dumps(obj).encode()
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Content-Length', str(len(body)))
+        self.send_header('Cache-Control', 'no-store')
+        self.end_headers()
+        self.wfile.write(body)
+
+
+def open_tabs(srv) -> list:
+    """The tabs that asked /_alive within TAB_TIMEOUT (forgetting older ones), with how long ago."""
+    now = time.monotonic()
+    with srv.lock:
+        for tab in [t for t, x in srv.tabs.items() if now - x['seen'] > TAB_TIMEOUT]:
+            del srv.tabs[tab]
+        return [dict(x, seen=round(now - x['seen']), tab=t) for t, x in srv.tabs.items()]
+
+
+def watch_running() -> bool:
+    """Whether a `claude-conversation --watch` process is running on this machine."""
+    name = os.path.basename(__file__)
+    for d in Path('/proc').iterdir():
+        if not d.name.isdigit():
+            continue
+        try:
+            args = (d / 'cmdline').read_bytes().decode(errors='replace').split('\0')
+        except OSError:
+            continue
+        if any(os.path.basename(a) == name for a in args) and any(a == '--watch' or a.startswith('--watch=') for a in args):
+            return True
+    return False
+
+
+def stop_when_idle(srv) -> None:
+    """Shuts srv down once it has gone IDLE_TIMEOUT without requests (open pages make one every 2 s,
+    or about once a minute when hidden) while no --watch run was going.
+    """
+    last_watch = time.monotonic()
+    while True:
+        time.sleep(IDLE_TIMEOUT / 60)
+        now = time.monotonic()
+        if watch_running():
+            last_watch = now
+        if now - max(last_watch, srv.last_request) > IDLE_TIMEOUT:
+            print(f'{dt.datetime.now():%Y-%m-%d %H:%M:%S} stopping: no page open and no --watch run for '
+                f'{IDLE_TIMEOUT // 60} min', flush=True)
+            return srv.shutdown()
+
 
 def run_server(port: int) -> None:
-    """Serves OUT_ROOT on all interfaces until killed (the process that --serve starts)."""
+    """Serves OUT_ROOT on all interfaces (the process that --serve starts) until killed, or until
+    stop_when_idle() stops it.
+    """
     handler = functools.partial(QuietHandler, directory=str(OUT_ROOT))
-    http.server.ThreadingHTTPServer(('', port), handler).serve_forever()
+    srv = http.server.ThreadingHTTPServer(('', port), handler)
+    srv.tabs, srv.lock, srv.last_request = {}, threading.Lock(), time.monotonic()
+    threading.Thread(target=stop_when_idle, args=(srv,), daemon=True).start()
+    srv.serve_forever()
+    pidfile = server_files(port)[0]
+    try:
+        if pidfile.read_text().strip() == str(os.getpid()):
+            pidfile.unlink()
+    except OSError:
+        pass
 
 
 def server_status(port: int) -> str:
@@ -471,6 +604,15 @@ def stop_command(port: int) -> str:
     return 'claude-conversation --stop-server' + ('' if port == SERVER_PORT else f' --port {port}')
 
 
+def server_tabs(port: int) -> list | None:
+    """The tabs that have the server's pages open (None if it does not say)."""
+    try:
+        with urllib.request.urlopen(f'http://127.0.0.1:{port}/_status', timeout=2) as r:
+            return json.load(r)['tabs']
+    except (OSError, ValueError, KeyError):
+        return None
+
+
 def at_exit_with_server(port: int, started: bool, watch: bool) -> None:
     """atexit hook of --serve runs. When a --watch run in a terminal ends, asks whether to stop the
     server: anything but no stops it, including another Ctrl+C. Says how to stop it whenever a --watch
@@ -479,17 +621,22 @@ def at_exit_with_server(port: int, started: bool, watch: bool) -> None:
     if server_status(port) != 'ours':
         return
     pid = server_pid(port)
-    running = f'the server on port {port} (pid {pid or "unknown"}) is still running; stop it with: {stop_command(port)}'
+    idle = f'it stops itself after {IDLE_TIMEOUT // 60} min with no page open and no --watch run'
+    running = (f'the server on port {port} (pid {pid or "unknown"}) is still running ({idle}); '
+        f'stop it now with: {stop_command(port)}')
     interactive = sys.stdin.isatty() and sys.stderr.isatty()
     if not (watch and interactive):
         if watch:
             print(running, file=sys.stderr)
         elif started and interactive:
-            print(f'started the server in the background (pid {pid}); stop it with: {stop_command(port)}', file=sys.stderr)
+            print(f'started the server in the background (pid {pid}; {idle}); stop it now with: {stop_command(port)}',
+                file=sys.stderr)
         return
     how = ''
-    print(f'stop the server on port {port} (pid {pid or "unknown"})? [Y/n] ', end='', file=sys.stderr, flush=True)
     try:
+        tabs = server_tabs(port)
+        tabs = '' if tabs is None else f', {plural(len(tabs), "tab")} open'
+        print(f'stop the server on port {port} (pid {pid or "unknown"}{tabs})? [Y/n] ', end='', file=sys.stderr, flush=True)
         answer = input()
     except KeyboardInterrupt:
         answer, how = '', 'Ctrl+C at the prompt: '
@@ -545,8 +692,9 @@ def main() -> None:
     ap.add_argument('--out', type=Path, help='output HTML path (single session)')
     ap.add_argument('--open', action='store_true', help='open the page in the browser (xdg-open)')
     ap.add_argument('--auto-refresh', type=int, metavar='SEC',
-        help='page reloads itself every SEC seconds, to show regenerations by other runs (e.g. you re-running '
-        'the command, or a Claude Code Stop hook); 0 removes that from a page')
+        help='opened as a file, the page reloads itself every SEC seconds, to show regenerations by other runs '
+        '(e.g. you re-running the command, or a Claude Code Stop hook; pages viewed through --serve reload when '
+        'regenerated, without this); 0 removes that from a page')
     ap.add_argument('--watch', type=int, default=0, metavar='SEC', help='regenerate every SEC seconds (implies --auto-refresh SEC)')
     ap.add_argument('--serve', action='store_true',
         help='start a background HTTP server for the pages (unless running) and print http:// URLs')
