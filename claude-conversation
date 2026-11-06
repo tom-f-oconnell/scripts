@@ -236,6 +236,7 @@ def md(text: str) -> str:
         mo = re.match(r'^(\s*)(\d+)\. (.*)', s); mb = re.match(r'^(\s*)[-*] (.*)', s)
         if mo or mb:
             tag = 'ol' if mo else 'ul'; items = []
+            start = f' start="{mo.group(2)}"' if mo and mo.group(2) != '1' else ''
             rx = re.compile(r'^(\s*)\d+\. (.*)') if mo else re.compile(r'^(\s*)[-*] (.*)')
             while i < len(lines) and rx.match(lines[i].rstrip()):
                 item = rx.match(lines[i].rstrip()).group(2); i += 1
@@ -243,7 +244,12 @@ def md(text: str) -> str:
                         and not re.match(r'^(\s*)([-*]|\d+\.) ', lines[i]) and not lines[i].startswith(('#', '|', '```')):
                     item += ' ' + lines[i].strip(); i += 1
                 items.append(f'<li>{inline(item)}</li>')
-            out.append(f'<{tag}>' + ''.join(items) + f'</{tag}>'); continue
+                j = i
+                while j < len(lines) and not lines[j].strip():
+                    j += 1
+                if j < len(lines) and rx.match(lines[j].rstrip()):
+                    i = j
+            out.append(f'<{tag}{start}>' + ''.join(items) + f'</{tag}>'); continue
         para = [s]; i += 1
         while i < len(lines) and lines[i].strip() and not re.match(r'^(\s*)([-*]|\d+\.) |^#|^\||^```', lines[i]):
             para.append(lines[i].strip()); i += 1
@@ -327,17 +333,18 @@ nav input{width:100%;box-sizing:border-box;padding:6px 8px;margin-bottom:8px;bor
 nav a{display:block;padding:5px 6px;border-radius:6px;color:var(--ink);text-decoration:none;font-size:.88em;border-bottom:1px solid var(--line)}
 nav a:hover{background:var(--soft)} nav a small{color:var(--muted)} nav a.hidden{display:none}
 main{flex:1;overflow:auto;padding:18px 28px 80px;box-sizing:border-box}
-.turn{margin:0 0 34px;scroll-margin-top:12px} .turn.hidden{display:none}
+.turn{margin:0 0 24px;scroll-margin-top:12px} .turn.hidden{display:none}
 .prompt{background:var(--user);border:1px solid var(--line);border-radius:8px;padding:10px 14px;white-space:pre-wrap}
 .prompt .k{color:var(--muted);font-size:.85em;margin-bottom:4px;white-space:normal}
 .answer{padding:8px 14px;border-left:3px solid var(--accent);margin-top:8px}
-.answer p{margin:8px 0} .answer code{background:var(--soft);padding:1px 4px;border-radius:4px;font-size:.9em}
+.answer p{margin:8px 0} .answer ul,.answer ol{margin:6px 0;padding-left:26px} .answer>:last-child{margin-bottom:0}
+.answer>button+*{margin-top:0} .answer code{background:var(--soft);padding:1px 4px;border-radius:4px;font-size:.9em}
 .answer pre{background:var(--soft);padding:10px;border-radius:6px;overflow:auto;font-size:.85em}
 .answer table{border-collapse:collapse;font-size:.85em;margin:8px 0} .answer th,.answer td{border-bottom:1px solid var(--line);padding:4px 7px;text-align:left;vertical-align:top}
 .answer th{color:var(--muted)} .answer h3,.answer h4,.answer h5,.answer h6{margin:14px 0 4px}
 details{margin-top:6px;color:var(--muted);font-size:.9em} details .ev{border-left:2px dashed var(--line);padding:4px 10px;margin:6px 0;white-space:pre-wrap}
 button.copy{float:right;font-size:.8em;padding:3px 8px;border:1px solid var(--line);border-radius:6px;background:var(--soft);color:var(--ink);cursor:pointer}
-.summary .prompt{background:var(--soft);font-style:italic} .meta{color:var(--muted);font-size:.85em;margin-bottom:14px}
+.summary-turn .prompt{background:var(--soft);font-style:italic} .meta{color:var(--muted);font-size:.85em;margin-bottom:14px}
 """
 
 JS = """
@@ -390,7 +397,7 @@ def render(turns, name: str, source: Path, project: Path, refresh: int, header: 
             n_ev = sum(1 for k, _ in t['later'] if k == 'event'); n_as = len(t['later']) - n_ev
             inter += fold(t['later'], f'{n_ev} background events after the answer, {n_as} short replies to them')
         prompt_html = html.escape(t['prompt'] if t['kind'] == 'prompt' else t['prompt'][:600] + ' ...')
-        body.append(f'<section class="turn {t["kind"]}" id="{tid}">'
+        body.append(f'<section class="turn {t["kind"]}-turn" id="{tid}">'
             f'<div class="prompt"><div class="k">{label} · {t["time"]}</div>{prompt_html}</div>'
             f'<div class="answer" id="a{i}" data-raw="{raw}"><button class="copy" onclick="cp(\'a{i}\',this)">copy answer</button>'
             f'{md(t["answer"]) if t["answer"] else "<p><i>(no final text; see the notes below)</i></p>"}</div>{inter}</section>')
