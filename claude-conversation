@@ -17,9 +17,12 @@ conversation's context; with respondToBashCommands false in settings.json Claude
     claude-conversation --watch 20 --open   # regenerate every 20 s until Ctrl+C (with auto-refresh)
     claude-conversation --serve         # ... and print an http:// URL instead (see below)
     claude-conversation --stop-server
-Output: ~/.claude/conversations/<project-slug>/<session-id>.html (override with --out). Every run also
-rewrites ~/.claude/conversations/index.html, which links every session page under that directory (all
-projects, grouped by project). Only one file:// URL is printed: the page's, or the index's if several
+Output: ~/.claude/conversations/<project-slug>/<session-id>.html (override with --out), and next to it
+<session-id>.search.js (its prompts and answers, for the index's search). Every run also rewrites
+~/.claude/conversations/index.html, which links every session page under that directory (all projects,
+grouped by project); its search box searches all their prompts and answers, listing the matches under
+each session. When a session page's search has no match, it lists the other sessions that have one,
+linking to the same search there (from ~/.claude/conversations/sessions.js, also rewritten every run). Only one file:// URL is printed: the page's, or the index's if several
 sessions were rendered. With -v, one line per session is printed instead (HTML path, the session's
 name as `/resume` lists it, and its prompt count), then the index URL. --open uses xdg-open on each
 generated page, so it does nothing useful over SSH: open the printed URL instead. Each page starts with a
@@ -344,25 +347,85 @@ main{flex:1;overflow:auto;padding:18px 28px 80px;box-sizing:border-box}
 .answer th{color:var(--muted)} .answer h3,.answer h4,.answer h5,.answer h6{margin:14px 0 4px}
 details{margin-top:6px;color:var(--muted);font-size:.9em} details .ev{border-left:2px dashed var(--line);padding:4px 10px;margin:6px 0;white-space:pre-wrap}
 button.copy{float:right;font-size:.8em;padding:3px 8px;border:1px solid var(--line);border-radius:6px;background:var(--soft);color:var(--ink);cursor:pointer}
-.summary-turn .prompt{background:var(--soft);font-style:italic} .meta{color:var(--muted);font-size:.85em;margin-bottom:14px}
+.summary-turn .prompt{background:var(--soft);font-style:italic}
+#others{background:var(--soft);border:1px solid var(--line);border-radius:8px;padding:8px 14px;margin-bottom:14px;font-size:.92em}
+#others ul{margin:4px 0;padding-left:22px} #others small{color:var(--muted)} .meta{color:var(--muted);font-size:.85em;margin-bottom:14px}
 """
 
 JS = """
-function flt(){const q=document.getElementById('q').value.toLowerCase();
+const ROOT=document.body.dataset.root,SESSION=document.body.dataset.session,SESSIONS=ROOT+'sessions.js?v='+Date.now();
+let ccAll=null;window.ccSessions=l=>{ccAll=l;};
+function flt(){const Q=document.getElementById('q'),q=Q.value.toLowerCase();let shown=0;
+ try{sessionStorage['ccQ'+location.pathname]=Q.value;}catch(e){}
  document.querySelectorAll('.turn').forEach(t=>{const h=q&&!t.innerText.toLowerCase().includes(q);t.classList.toggle('hidden',h);
-  const a=document.querySelector('nav a[href="#'+t.id+'"]'); if(a) a.classList.toggle('hidden',h);});}
+  const a=document.querySelector('nav a[href="#'+t.id+'"]'); if(a) a.classList.toggle('hidden',h); shown+=!h;});
+ if(q.trim()&&!shown)others(Q.value.trim());else document.getElementById('others').hidden=true;}
+async function others(raw){   // no match in this session: list the other sessions with one, linking to the same search there
+ const q=raw.toLowerCase(),box=document.getElementById('others'),current=()=>document.getElementById('q').value.trim()===raw;
+ box.hidden=false;box.textContent='No matches in this session. Searching the other sessions...';
+ await ccLoad(SESSIONS);
+ const list=(ccAll||[]).filter(s=>s.session!==SESSION);
+ await Promise.all(list.map(s=>ccLoad(ROOT+s.search)));
+ if(!current())return;
+ if(!ccAll){box.textContent='No matches in this session.';return;}
+ const hits=list.map(s=>[s,ccMatches(s.session,q).length]).filter(([s,n])=>n);
+ box.innerHTML=!hits.length?'No matches in this session, or in any other.'
+  :'No matches in this session. Matches in other sessions (in their prompts and answers):<ul>'+hits.map(([s,n])=>
+   `<li><a href="${esc(ROOT+s.href)}#q=${encodeURIComponent(raw)}">${esc(s.name)}</a> <small>${esc(s.project)} · ${n} match${n>1?'es':''}</small></li>`).join('')+'</ul>';}
 function cp(id,btn){const t=document.getElementById(id).dataset.raw;
  const done=()=>{btn.textContent='copied';setTimeout(()=>btn.textContent='copy answer',1200);};
  if(navigator.clipboard&&window.isSecureContext)return navigator.clipboard.writeText(t).then(done);
  // no clipboard API over plain http to another machine (e.g. --serve over a VPN)
  const a=document.createElement('textarea');a.value=t;a.style.position='fixed';a.style.opacity='0';
  document.body.append(a);a.select();try{if(document.execCommand('copy'))done();}finally{a.remove();}}
+(function(){   // a query from a link (#q=...), else the one typed before the last reload
+ let q='';
+ if(location.hash.startsWith('#q=')){q=decodeURIComponent(location.hash.slice(3));history.replaceState(null,'',location.pathname+location.search);}
+ else try{q=sessionStorage['ccQ'+location.pathname]||'';}catch(e){}
+ if(q){document.getElementById('q').value=q;flt();}})();
+"""
+
+# Shared by both pages' searches: each session's prompts and answers come from the <session>.search.js
+# next to its page, loaded as a script (which, unlike fetch(), also works for pages opened as files).
+SEARCH_JS = """
+const ccData={},ccLoads={};
+window.ccSearch=d=>{ccData[d.session]=d.turns.map(([id,label,p,a])=>({id,label,p,a,lp:p.toLowerCase(),la:a.toLowerCase()}));};
+function ccLoad(src){return ccLoads[src]||(ccLoads[src]=new Promise(done=>{
+ const s=document.createElement('script');s.src=src;s.onload=s.onerror=done;document.head.append(s);}));}
+function ccMatches(session,q){const out=[];   // [turn, 'prompt' or 'answer', its text, where q is] for each that has q
+ for(const t of ccData[session]||[])for(const [what,text,low] of [['prompt',t.p,t.lp],['answer',t.a,t.la]]){
+  const at=low.indexOf(q);if(at>=0)out.push([t,what,text,at]);}
+ return out;}
+function esc(s){return s.replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c]);}
+function snip(text,at,len){const a=Math.max(0,at-60),b=Math.min(text.length,at+len+100);
+ return (a?'…':'')+esc(text.slice(a,at))+'<mark>'+esc(text.slice(at,at+len))+'</mark>'+esc(text.slice(at+len,b))+(b<text.length?'…':'');}
 """
 
 
-def render(turns, name: str, source: Path, project: Path, refresh: int, header: str, auto_refresh: int) -> str:
+def turn_labels(turns) -> list:
+    """Each turn's label on the pages: "<k>/<number of prompts>" for prompts, else "context summary"."""
+    n = sum(t['kind'] == 'prompt' for t in turns)
+    labels, k = [], 0
+    for t in turns:
+        k += t['kind'] == 'prompt'
+        labels.append(f'{k}/{n}' if t['kind'] == 'prompt' else 'context summary')
+    return labels
+
+
+def search_js(turns, session: str) -> str:
+    """The session's prompts and final answers, as a script for the index page's search, which loads it
+    once something is typed (a script, unlike fetch(), can also be loaded by pages opened as files).
+    """
+    rows = [[f't{i}', label, t['prompt'] if t['kind'] == 'prompt' else '', t['answer']]
+        for i, (t, label) in enumerate(zip(turns, turn_labels(turns)))]
+    return f'ccSearch({json.dumps({"session": session, "turns": rows})});\n'
+
+
+def render(turns, name: str, source: Path, project: Path, refresh: int, header: str, auto_refresh: int,
+        root: str) -> str:
     """The session page. Opened as a file, it reloads itself every refresh seconds (if not 0). It
-    records auto_refresh (the --auto-refresh interval later runs must repeat) in its metadata.
+    records auto_refresh (the --auto-refresh interval later runs must repeat) in its metadata. root is
+    the URL of OUT_ROOT relative to the page.
     """
     prompts = [t for t in turns if t['kind'] == 'prompt']
     n = len(prompts)
@@ -373,13 +436,7 @@ def render(turns, name: str, source: Path, project: Path, refresh: int, header: 
         auto_refresh=auto_refresh)
     meta = f'<meta name="claude-conversation" content="{html.escape(json.dumps(info), quote=True)}">'
     nav, body = [], []
-    k = 0
-    for i, t in enumerate(turns):
-        if t['kind'] == 'prompt':
-            k += 1
-            label = f'{k}/{n}'
-        else:
-            label = 'context summary'
+    for i, (t, label) in enumerate(zip(turns, turn_labels(turns))):
         tid = f't{i}'
         snippet = html.escape(t['prompt'][:90].replace('\n', ' '))
         nav.append(f'<a href="#{tid}"><b>{label}</b> <small>{t["time"]}</small><br>{snippet}</a>')
@@ -402,9 +459,10 @@ def render(turns, name: str, source: Path, project: Path, refresh: int, header: 
             f'<div class="answer" id="a{i}" data-raw="{raw}"><button class="copy" onclick="cp(\'a{i}\',this)">copy answer</button>'
             f'{md(t["answer"]) if t["answer"] else "<p><i>(no final text; see the notes below)</i></p>"}</div>{inter}</section>')
     return (f'<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">{version_meta()}{meta}<title>{html.escape(title)}</title>'
-        f'<style>{CSS}</style></head><body>{header}<div class="cols"><nav><input id="q" placeholder="search prompts and answers" oninput="flt()">'
+        f'<style>{CSS}</style></head><body data-root="{html.escape(root)}" data-session="{html.escape(source.stem)}">'
+        f'{header}<div class="cols"><nav><input id="q" placeholder="search prompts and answers" oninput="flt()">'
         + '\n'.join(nav) + f'</nav><main><div class="meta">{html.escape(title)} · {n} prompts · source {html.escape(str(source))}</div>'
-        + '\n'.join(body) + f'</main></div><script>{JS}{live_js(refresh)}</script></body></html>')
+        '<div id="others" hidden></div>' + '\n'.join(body) + f'</main></div><script>{SEARCH_JS}{JS}{live_js(refresh)}</script></body></html>')
 
 
 INDEX_CSS = ROOT_CSS + """
@@ -413,7 +471,32 @@ input{width:100%;box-sizing:border-box;padding:6px 8px;margin:6px 0 14px;border:
 h2{font-size:1em;color:var(--muted);margin:22px 0 4px;font-weight:normal} .meta{color:var(--muted);font-size:.85em}
 header{padding:0 0 4px;margin-bottom:12px}
 table{border-collapse:collapse;width:100%} th,td{border-bottom:1px solid var(--line);padding:4px 8px;text-align:left;vertical-align:top;font-size:.92em}
-th{color:var(--muted);font-weight:normal} td.n{text-align:right} a{color:var(--accent)} tr.hidden{display:none}
+th{color:var(--muted);font-weight:normal} td.n{text-align:right} a{color:var(--accent)}
+tr.nomatch td{opacity:.5} tr.hits td{padding:0 8px 8px 24px;font-size:.85em;color:var(--muted)}
+tr.hits div{margin:3px 0;overflow-wrap:anywhere} mark{background:#ffe58a;color:#1f2328;border-radius:2px}
+"""
+
+# The index's search: on the first query, loads every session's <session>.search.js, then lists under
+# each session row the turns whose prompt or answer contains the query (case-insensitively). An empty
+# box shows the plain list again. The query survives reloads.
+INDEX_JS = """
+const Q=document.getElementById('q'),MAX=6;let loaded=false;
+async function flt(){
+ const q=Q.value.trim().toLowerCase(),rows=[...document.querySelectorAll('tr[data-s]')];
+ try{sessionStorage.ccIndexQ=Q.value;}catch(e){}
+ if(!q){rows.forEach(r=>{r.classList.remove('nomatch');r.nextElementSibling.hidden=true;});return;}
+ if(!loaded)rows.forEach(r=>{r.nextElementSibling.hidden=false;r.nextElementSibling.firstElementChild.textContent='searching...';});
+ await Promise.all(rows.map(r=>ccLoad(r.dataset.search)));loaded=true;
+ if(Q.value.trim().toLowerCase()!==q)return;   // typed on meanwhile
+ for(const r of rows){
+  const hits=r.nextElementSibling,href=esc(r.dataset.href),m=ccMatches(r.dataset.session,q);
+  const lines=m.slice(0,MAX).map(([t,what,text,at])=>`<div><a href="${href}#${t.id}">${t.label} ${what}</a> ${snip(text,at,q.length)}</div>`);
+  if(m.length>MAX)lines.push(`<div><a href="${href}#q=${encodeURIComponent(Q.value.trim())}">${m.length-MAX} more (open the session with this search)</a></div>`);
+  hits.firstElementChild.innerHTML=!(r.dataset.session in ccData)?'<i>not searchable: re-run claude-conversation in its project</i>'
+   :m.length?lines.join(''):'no matches in prompts or answers';
+  r.classList.toggle('nomatch',!m.length&&!r.innerText.toLowerCase().includes(q));hits.hidden=false;}
+}
+try{if(sessionStorage.ccIndexQ){Q.value=sessionStorage.ccIndexQ;flt();}}catch(e){}
 """
 
 
@@ -438,22 +521,29 @@ def write_index(header: str):
         info = session_info(page)
         if info:
             info['href'] = str(page.relative_to(OUT_ROOT))
+            info['search'] = f'{page.relative_to(OUT_ROOT).with_suffix(".search.js")}?v={page_version(page) or ""}'
             by_project.setdefault(info['project'], []).append(info)
     parts = []
     for project, infos in sorted(by_project.items(), key=lambda kv: max(i['last'] for i in kv[1]), reverse=True):
-        rows = ''.join(f'<tr data-s><td><a href="{html.escape(i["href"])}">{html.escape(i["name"])}</a></td>'
+        rows = ''.join(f'<tr data-s data-session="{html.escape(i["session"])}" data-href="{html.escape(i["href"])}" '
+            f'data-search="{html.escape(i["search"])}"><td><a href="{html.escape(i["href"])}">{html.escape(i["name"])}</a></td>'
             f'<td class="n">{i["prompts"]}</td><td>{i["first"]}</td><td>{i["last"]}</td><td><small>{i["session"][:8]}</small></td></tr>'
+            f'<tr class="hits" hidden><td colspan="5"></td></tr>'
             for i in sorted(infos, key=lambda i: i['last'], reverse=True))
         parts.append(f'<h2>{html.escape(project)}</h2><table><tr><th>session</th><th class="n">prompts</th>'
             f'<th>first prompt</th><th>last prompt</th><th>id</th></tr>{rows}</table>')
     n = sum(len(v) for v in by_project.values())
-    js = ("function flt(){const q=document.getElementById('q').value.toLowerCase();document.querySelectorAll('tr[data-s]')"
-        ".forEach(r=>r.classList.toggle('hidden',q&&!r.innerText.toLowerCase().includes(q)));}")
     out = OUT_ROOT / 'index.html'
     out.write_text(f'<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">{version_meta()}<title>Claude Code sessions</title>'
         f'<style>{INDEX_CSS}</style></head><body>{header}<div class="meta">{plural(n, "rendered session")} in '
         f'{plural(len(by_project), "project")} · run claude-conversation (--all) in a project to add or refresh its sessions</div>'
-        f'<input id="q" placeholder="filter sessions" oninput="flt()">' + '\n'.join(parts) + f'<script>{js}{live_js(0)}</script></body></html>')
+        f'<input id="q" placeholder="search all prompts and answers (and session names)" oninput="flt()">' + '\n'.join(parts)
+        + f'<script>{SEARCH_JS}{INDEX_JS}{live_js(0)}</script></body></html>')
+    # the session list for session pages' searches of the other sessions
+    sessions = [{k: i[k] for k in ('session', 'name', 'project', 'href', 'search')}
+        for _, infos in sorted(by_project.items(), key=lambda kv: max(i['last'] for i in kv[1]), reverse=True)
+        for i in sorted(infos, key=lambda i: i['last'], reverse=True)]
+    (OUT_ROOT / 'sessions.js').write_text(f'ccSessions({json.dumps(sessions)});\n')
     return out, n, len(by_project)
 
 
@@ -789,7 +879,9 @@ def main() -> None:
                     name = (first[:60] + '...') if len(first) > 60 else first or '(empty session)'
                 out.parent.mkdir(parents=True, exist_ok=True)
                 index_href = urllib.parse.quote(Path(os.path.relpath(OUT_ROOT / 'index.html', out.parent.resolve())).as_posix())
-                out.write_text(render(turns, name, f, args.project.resolve(), refresh, header_html(server, index_href), keep))
+                out.with_suffix('.search.js').write_text(search_js(turns, f.stem))
+                out.write_text(render(turns, name, f, args.project.resolve(), refresh, header_html(server, index_href), keep,
+                    index_href.removesuffix('index.html')))
                 if args.verbose:
                     print(f'{url_for(out, base) if base else out}  "{name}"  ({plural(len(prompts), "prompt")})', flush=True)
             index, n_sessions, n_projects = write_index(header_html(server))
