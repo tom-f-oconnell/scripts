@@ -36,11 +36,15 @@ box, or the cursor in it): then a notice with a reload button says the page has 
 once the box is empty and left. A page's version is a hash of its content (apart from the title line),
 so regenerating it unchanged does not reload it.
 
-Each prompt and each answer has a star button at its top right, which stars (or unstars) the turn: both
-show it. The prompt list shows starred turns first, unless its "starred first" box is unticked. Stars are
-saved by the --serve server (pages opened as files show them but cannot change them), with the prompt and
-answer, to ~/.claude/conversations/.starred.json, whose entries later runs keep up to date with the
-transcript (e.g. an answer that was still being written).
+At its top right, each prompt has "copy", "hide" and star buttons, and each answer "copy" and a star.
+Either star stars (or unstars) the turn, and "hide" hides the turn (prompt and answer) or shows it again.
+The prompt list shows starred turns first, unless its "starred first" box is unticked. Hidden turns are
+left out of the page, its prompt list and its searches, and of the index's search, unless "show hidden"
+is ticked (on either page; the turns are then dimmed); next to it is how many turns are hidden (on the
+index, in the sessions it lists). The --serve server saves stars and hidden turns (pages opened as files
+show them but cannot change them), with their prompts and answers, to ~/.claude/conversations/.starred.json
+and .hidden.json, whose entries later runs keep up to date with the transcript (e.g. an answer that was
+still being written).
 
 --serve starts a background HTTP server for ~/.claude/conversations on all interfaces (port 10041 by
 default; --port), unless it is already running, and prints http:// URLs instead of file:// ones. Their
@@ -90,8 +94,10 @@ IDLE_TIMEOUT = 30 * 60   # the server stops itself after this long with no page 
 TAB_TIMEOUT = 3 * 60     # a tab counts as open while it has asked within this long (hidden tabs ask less often)
 VERSION_TAG = 'claude-conversation-version'
 GENERATED_TAG = 'claude-conversation-generated'
-SERVER_API = 2           # bumped when what pages ask the server changes: a running older server is replaced
-STARRED = OUT_ROOT / '.starred.json'   # the starred turns, with their prompts and answers
+SERVER_API = 3           # bumped when what pages ask the server changes: a running older server is replaced
+# the starred and the hidden turns, with their prompts and answers, and the field of when each was marked
+MARKS = {'star': OUT_ROOT / '.starred.json', 'hide': OUT_ROOT / '.hidden.json'}
+MARKED_FIELD = {'star': 'starred', 'hide': 'hidden'}
 # filled in by write_page(), after hashing the rest of the page for its version
 VERSION_SLOT, GENERATED_SLOT = '\0version\0', '\0generated\0'
 TAGS_NOT_PROMPT = ('<task-notification', '<system-reminder', '<local-command', '<command-name',
@@ -321,7 +327,7 @@ LIVE_JS = """
   const base=location.href.split(/[?#]/)[0].replace(/[.]html$/,'');
   const load=src=>{const s=document.createElement('script');s.src=src+'?t='+Date.now();s.onload=s.onerror=()=>s.remove();document.head.append(s);};
   window.ccVersion=seen;
-  check=()=>{load(base+'.version.js');if(window.ccStars)load(base+'.stars.js');};
+  check=()=>{load(base+'.version.js');if(document.body.dataset.session)load(base+'.marks.js');};
   check();setInterval(check,2000);
  }else{
   const tab=sessionStorage.ccTab||(sessionStorage.ccTab=Math.random().toString(36).slice(2));
@@ -332,7 +338,7 @@ LIVE_JS = """
     const j=await r.json();if(j.restart)restart=j.restart;
     if(down){down=false;show();}
     seen(j.version,j.generated);
-    if(j.stars&&window.ccStars)ccStars(j.stars,j.stars_rev);
+    if(j.marks&&window.ccMarks)ccMarks(j.marks);
    }catch(e){if(!down){down=true;show();}}
    busy=false;timer=setTimeout(check,2000);};
   check();
@@ -403,7 +409,8 @@ body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 -apple-system,
 .cols{display:flex;flex:1;min-height:0}
 nav{width:340px;min-width:260px;border-right:1px solid var(--line);overflow:auto;padding:12px;box-sizing:border-box}
 nav #q{width:100%;box-sizing:border-box;padding:6px 8px;margin-bottom:4px;border:1px solid var(--line);border-radius:6px;background:var(--soft);color:var(--ink)}
-nav label{display:block;font-size:.8em;color:var(--muted);margin-bottom:6px;cursor:pointer} nav label input{vertical-align:-2px;margin:0 4px 0 2px}
+nav .opts{font-size:.8em;color:var(--muted);margin-bottom:6px} nav .opts label{margin-right:12px;cursor:pointer;white-space:nowrap}
+nav .opts input{vertical-align:-2px;margin:0 4px 0 2px}
 nav a .st{display:none;color:#d4a72c} nav a.starred .st{display:inline}
 nav a{display:block;padding:5px 6px;border-radius:6px;color:var(--ink);text-decoration:none;font-size:.88em;border-bottom:1px solid var(--line)}
 nav a:hover{background:var(--soft)} nav a small{color:var(--muted)} nav a.hidden{display:none} .nonav nav{display:none}
@@ -421,9 +428,11 @@ main>.meta{flex:none;padding:10px 28px;border-bottom:1px solid var(--line);color
 .answer table{border-collapse:collapse;font-size:.85em;margin:8px 0} .answer th,.answer td{border-bottom:1px solid var(--line);padding:4px 7px;text-align:left;vertical-align:top}
 .answer th{color:var(--muted)} .answer h3,.answer h4,.answer h5,.answer h6{margin:14px 0 4px}
 details{margin-top:6px;color:var(--muted);font-size:.9em} details .ev{border-left:2px dashed var(--line);padding:4px 10px;margin:6px 0;white-space:pre-wrap}
-button.copy{float:right;font-size:.8em;padding:3px 8px;border:1px solid var(--line);border-radius:6px;background:var(--soft);color:var(--ink);cursor:pointer}
+button[data-l]::after{content:attr(data-l)}
+button.copy,button.hide{float:right;margin-left:6px;font-size:.8em;padding:3px 8px;border:1px solid var(--line);border-radius:6px;background:var(--soft);color:var(--ink);cursor:pointer;font-style:normal}
+.k button.copy,.k button.hide{font-size:.94em;padding:1px 8px;margin-top:-2px}
 button.star{float:right;margin-left:6px;padding:0 2px;border:none;background:none;color:var(--muted);font-size:1.25em;line-height:1.1;cursor:pointer;font-style:normal}
-.prompt button.star{margin:-3px -6px 0 6px;font-size:1.45em} .starred button.star{color:#d4a72c} button.star.ro{cursor:help}
+.prompt button.star{margin:-3px -6px 0 6px;font-size:1.45em} .starred button.star{color:#d4a72c} button.ro{cursor:help}
 .summary-turn .prompt{background:var(--soft);font-style:italic}
 #others{background:var(--soft);border:1px solid var(--line);border-radius:8px;padding:8px 14px;margin-bottom:14px;font-size:.92em}
 #others ul{margin:4px 0;padding-left:22px} #others small{color:var(--muted)}
@@ -432,80 +441,112 @@ button.star{float:right;margin-left:6px;padding:0 2px;border:none;background:non
 JS = """
 const ROOT=document.body.dataset.root,SESSION=document.body.dataset.session,SESSIONS=ROOT+'sessions.js?v='+Date.now();
 let ccAll=null;window.ccSessions=l=>{ccAll=l;};
-function flt(){const Q=document.getElementById('q'),q=Q.value.toLowerCase();let shown=0;
+function flt(){const Q=document.getElementById('q'),q=Q.value.toLowerCase(),hiding=ccHiding();let shown=0,inHidden=0;
  try{sessionStorage['ccQ'+location.pathname]=Q.value;}catch(e){}
  document.querySelectorAll('.turn').forEach(t=>{const h=q&&!t.innerText.toLowerCase().includes(q);t.classList.toggle('hidden',h);
-  const a=document.querySelector('nav a[href="#'+t.id+'"]'); if(a) a.classList.toggle('hidden',h); shown+=!h;});
- if(q.trim()&&!shown)others(Q.value.trim());else document.getElementById('others').hidden=true;
+  const a=document.querySelector('nav a[href="#'+t.id+'"]'); if(a) a.classList.toggle('hidden',h);
+  if(!h){if(hiding&&marks.hide.has(t.dataset.key))inHidden++;else shown++;}});
+ if(q.trim()&&!shown)others(Q.value.trim(),inHidden);else document.getElementById('others').hidden=true;
  navLabel();}
 function navLabel(){   // with the list hidden, the button also shows any search still filtering the turns
  const h=document.documentElement.classList.contains('nonav'),q=document.getElementById('q').value.trim(),b=document.getElementById('navbtn');
  b.textContent=h?'» prompts'+(q?' (search: '+q+')':''):'«';b.title=h?'show the prompt list and search box':'hide the prompt list';}
 function toggleNav(){const h=document.documentElement.classList.toggle('nonav');try{localStorage.ccNav=h?'hidden':'';}catch(e){}navLabel();}
-async function others(raw){   // no match in this session: list the other sessions with one, linking to the same search there
+async function others(raw,inHidden){   // no match in this session: list the other sessions with one, linking to the same search there
  const q=raw.toLowerCase(),box=document.getElementById('others'),current=()=>document.getElementById('q').value.trim()===raw;
- box.hidden=false;box.textContent='No matches in this session. Searching the other sessions...';
+ const none='No matches in this session'+(inHidden?` (except in ${inHidden} hidden turn${inHidden>1?'s':''}: tick "show hidden" to see ${inHidden>1?'them':'it'})`:'');
+ box.hidden=false;box.textContent=none+'. Searching the other sessions...';
  await ccLoad(SESSIONS);
  const list=(ccAll||[]).filter(s=>s.session!==SESSION);
- await Promise.all(list.map(s=>ccLoad(ROOT+s.search)));
+ await Promise.all(list.map(s=>Promise.all([ccLoad(ROOT+s.search),ccLoadNow(ROOT+s.href.replace(/[.]html$/,'.marks.js'))])));
  if(!current())return;
- if(!ccAll){box.textContent='No matches in this session.';return;}
+ if(!ccAll){box.textContent=none+'.';return;}
  const hits=list.map(s=>[s,ccMatches(s.session,q).length]).filter(([s,n])=>n);
- box.innerHTML=!hits.length?'No matches in this session, or in any other.'
-  :'No matches in this session. Matches in other sessions (in their prompts and answers):<ul>'+hits.map(([s,n])=>
+ box.innerHTML=!hits.length?esc(none)+', or in any other.'
+  :esc(none)+'. Matches in other sessions (in their prompts and answers):<ul>'+hits.map(([s,n])=>
    `<li><a href="${esc(ROOT+s.href)}#q=${encodeURIComponent(raw)}">${esc(s.name)}</a> <small>${esc(s.project)} · ${n} match${n>1?'es':''}</small></li>`).join('')+'</ul>';}
-// Stars: the server saves them (POST /_star) and keeps every page in sync (/_alive answers, or <page>.stars.js
-// for pages opened as files, which cannot change them). Each turn's two buttons show the same star.
-const SERVED=location.protocol!=='file:';let stars=new Set(),starsRev=-1,starring=0;
-window.ccStars=(keys,rev)=>{if(starring||rev<starsRev)return;starsRev=rev;stars=new Set(keys);showStars();};
-function showStars(){
- document.querySelectorAll('.turn').forEach(t=>{const on=stars.has(t.dataset.key);t.classList.toggle('starred',on);
-  t.querySelectorAll('button.star').forEach(b=>b.textContent=on?'\u2605':'\u2606');
+// Marks (starred and hidden turns): the server saves them (POST /_mark) and keeps every page in sync (/_alive
+// answers, or <page>.marks.js for pages opened as files, which cannot change them). Both of a turn's stars
+// show the same.
+const SERVED=location.protocol!=='file:',marks={star:new Set(),hide:new Set()},revs={star:-1,hide:-1};let marking=0;
+window.ccOnMarks=d=>{if(d.session!==SESSION||marking)return;let changed=false;
+ for(const k of ['star','hide'])if(d[k]&&d[k].rev>revs[k]){revs[k]=d[k].rev;marks[k]=new Set(d[k].keys);changed=true;}
+ if(changed)showMarks();};
+function showMarks(){
+ document.querySelectorAll('.turn').forEach(t=>{const k=t.dataset.key,on=marks.star.has(k),h=t.querySelector('button.hide');
+  t.classList.toggle('starred',on);t.querySelectorAll('button.star').forEach(b=>b.dataset.l=on?'\u2605':'\u2606');
+  if(h)h.dataset.l=marks.hide.has(k)?'unhide':'hide';
   const a=document.querySelector('nav a[href="#'+t.id+'"]');if(a)a.classList.toggle('starred',on);});
- sortNav();}
+ ccHideStyle([...marks.hide]);
+ document.getElementById('nhid').textContent='('+marks.hide.size+' hidden)';
+ sortNav();
+ if(document.getElementById('q').value.trim())flt();}
+function showHidden(){const on=document.getElementById('showhid').checked;
+ document.documentElement.classList.toggle('hidehid',!on);try{localStorage.ccShowHidden=on?'1':'';}catch(e){}flt();}
 function sortNav(){   // starred turns first (each group in turn order), unless the box is unticked
  const first=document.getElementById('starfirst').checked,nav=document.querySelector('nav');
  try{localStorage.ccStarFirst=first?'':'0';}catch(e){}
  [...nav.querySelectorAll('a')].sort((a,b)=>(first?b.classList.contains('starred')-a.classList.contains('starred'):0)||a.dataset.i-b.dataset.i)
   .forEach(a=>nav.append(a));}
-async function star(btn){
+async function mark(btn,kind){   // kind: 'star' or 'hide'
  if(!SERVED)return;
- const t=btn.closest('.turn'),k=t.dataset.key,on=!stars.has(k);let j=null;
- starring++;stars[on?'add':'delete'](k);showStars();
- try{const r=await fetch('/_star',{method:'POST',headers:{'Content-Type':'application/json'},
-  body:JSON.stringify({page:location.pathname,key:k,turn:t.id,on})});if(r.ok)j=await r.json();}catch(e){}
- starring--;
- if(j)ccStars(j.stars,j.rev);
- else{stars[on?'delete':'add'](k);showStars();alert('The server could not save the star.');}}
-function cp(id,btn){const t=document.getElementById(id).dataset.raw;
- const done=()=>{btn.textContent='copied';setTimeout(()=>btn.textContent='copy answer',1200);};
+ const t=btn.closest('.turn'),k=t.dataset.key,on=!marks[kind].has(k);let j=null;
+ marking++;marks[kind][on?'add':'delete'](k);showMarks();
+ try{const r=await fetch('/_mark',{method:'POST',headers:{'Content-Type':'application/json'},
+  body:JSON.stringify({kind,page:location.pathname,key:k,turn:t.id,on})});if(r.ok)j=await r.json();}catch(e){}
+ marking--;
+ if(j)ccMarks(j);
+ else{marks[kind][on?'delete':'add'](k);showMarks();alert('The server could not save this.');}}
+function cp(id,btn){const t=document.getElementById(id).dataset.raw;   // (button labels are CSS, so searches skip them)
+ const done=()=>{btn.dataset.l='copied';setTimeout(()=>btn.dataset.l='copy',1200);};
  if(navigator.clipboard&&window.isSecureContext)return navigator.clipboard.writeText(t).then(done);
  // no clipboard API over plain http to another machine (e.g. --serve over a VPN)
  const a=document.createElement('textarea');a.value=t;a.style.position='fixed';a.style.opacity='0';
  document.body.append(a);a.select();try{if(document.execCommand('copy'))done();}finally{a.remove();}}
-(function(){   // a query from a link (#q=...), else the one typed before the last reload
+(function(){
+ try{document.getElementById('starfirst').checked=localStorage.ccStarFirst!=='0';}catch(e){}
+ document.getElementById('showhid').checked=!ccHiding();
+ const ro='stars and hidden turns can only be changed on pages served by claude-conversation --serve';
+ document.querySelectorAll('button.star').forEach(b=>{b.title=SERVED?'star this prompt and answer (saved in ~/.claude/conversations/.starred.json)':ro;b.classList.toggle('ro',!SERVED);});
+ document.querySelectorAll('button.hide').forEach(b=>{b.title=SERVED?'hide this prompt and answer (saved in ~/.claude/conversations/.hidden.json)':ro;b.classList.toggle('ro',!SERVED);});
+ showMarks();(window.ccMarksQ||[]).forEach(ccMarks);   // the marks loaded in <head>
+ // a query from a link (#q=...), else the one typed before the last reload
  let q='';
  if(location.hash.startsWith('#q=')){q=decodeURIComponent(location.hash.slice(3));history.replaceState(null,'',location.pathname+location.search);}
  else try{q=sessionStorage['ccQ'+location.pathname]||'';}catch(e){}
- if(q){document.getElementById('q').value=q;flt();}else navLabel();
- try{document.getElementById('starfirst').checked=localStorage.ccStarFirst!=='0';}catch(e){}
- document.querySelectorAll('button.star').forEach(b=>{b.title=SERVED?'star this prompt and answer (saved in ~/.claude/conversations/.starred.json)'
-  :'stars can only be changed on pages served by claude-conversation --serve';b.classList.toggle('ro',!SERVED);});})();
+ if(q){document.getElementById('q').value=q;flt();}else navLabel();})();
 """
 
-# Whether the prompt list is hidden (by its button) is remembered in localStorage, for all session pages,
-# and applied in <head> so the list does not flash up before the page's scripts run.
-NAV_STATE_JS = "<script>try{if(localStorage.ccNav==='hidden')document.documentElement.classList.add('nonav');}catch(e){}</script>"
+# In <head>, so nothing flashes up before the page's scripts run: whether the prompt list is hidden (by its
+# button) and whether hidden turns are shown (both remembered in localStorage, for all pages), and the hidden
+# turns, from the <page>.marks.js loaded next (ccMarks() keeps it for the page's scripts), as CSS.
+HEAD_JS = """<script>
+(function(){const h=document.documentElement;let s={};try{s=localStorage;}catch(e){}
+ if(s.ccNav==='hidden')h.classList.add('nonav');
+ if(s.ccShowHidden!=='1')h.classList.add('hidehid');})();
+window.ccMarksQ=[];window.ccMarks=d=>ccMarksQ.push(d);
+window.ccHideStyle=keys=>{let s=document.getElementById('hidstyle');
+ if(!s){s=document.createElement('style');s.id='hidstyle';document.head.append(s);}
+ const sel=keys.map(k=>'[data-key="'+CSS.escape(k)+'"]').join(',');
+ s.textContent=sel?'.hidehid :is('+sel+'){display:none} :is('+sel+'){opacity:.5}':'';};
+</script>"""
 
 # Shared by both pages' searches: each session's prompts and answers come from the <session>.search.js
 # next to its page, loaded as a script (which, unlike fetch(), also works for pages opened as files).
 SEARCH_JS = """
-const ccData={},ccLoads={};
-window.ccSearch=d=>{ccData[d.session]=d.turns.map(([id,label,p,a])=>({id,label,p,a,lp:p.toLowerCase(),la:a.toLowerCase()}));};
+const ccData={},ccLoads={},ccMarksOf={};
+window.ccSearch=d=>{ccData[d.session]=d.turns.map(([id,label,p,a,time,key])=>({id,label,p,a,key:key||id,lp:p.toLowerCase(),la:a.toLowerCase()}));};
+// each session's starred and hidden turns, from its <session>.marks.js (or, for its own page, the server)
+window.ccMarks=d=>{if(!d||!d.session)return;ccMarksOf[d.session]=d;if(window.ccOnMarks)ccOnMarks(d);};
+const ccHiding=()=>document.documentElement.classList.contains('hidehid');
 function ccLoad(src){return ccLoads[src]||(ccLoads[src]=new Promise(done=>{
  const s=document.createElement('script');s.src=src;s.onload=s.onerror=done;document.head.append(s);}));}
-function ccMatches(session,q){const out=[];   // [turn, 'prompt' or 'answer', its text, where q is] for each that has q
- for(const t of ccData[session]||[])for(const [what,text,low] of [['prompt',t.p,t.lp],['answer',t.a,t.la]]){
+function ccLoadNow(src){return new Promise(done=>{   // (again each time)
+ const s=document.createElement('script');s.src=src+(src.includes('?')?'&':'?')+'t='+Date.now();
+ s.onload=s.onerror=()=>{s.remove();done();};document.head.append(s);});}
+function ccMatches(session,q,all){   // [turn, 'prompt' or 'answer', its text, where q is] for each that has q
+ const out=[],hidden=!all&&ccHiding()&&new Set(((ccMarksOf[session]||{}).hide||{}).keys||[]);   // (all: also hidden turns)
+ for(const t of ccData[session]||[])if(!(hidden&&hidden.has(t.key)))for(const [what,text,low] of [['prompt',t.p,t.lp],['answer',t.a,t.la]]){
   const at=low.indexOf(q);if(at>=0)out.push([t,what,text,at]);}
  return out;}
 function esc(s){return s.replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c]);}
@@ -526,7 +567,7 @@ def turn_labels(turns) -> list:
 
 def turn_rows(turns) -> list:
     """[id on the page, label, prompt ('' for context summaries), final answer, time, key] for each turn.
-    The key (the prompt's uuid in the transcript, else the id) is what stars are saved under.
+    The key (the prompt's uuid in the transcript, else the id) is what stars and hidden turns are saved under.
     """
     return [[f't{i}', label, t['prompt'] if t['kind'] == 'prompt' else '', t['answer'], t['time'], t.get('key') or f't{i}']
         for i, (t, label) in enumerate(zip(turns, turn_labels(turns)))]
@@ -534,7 +575,7 @@ def turn_rows(turns) -> list:
 
 def search_js(turns, session: str) -> str:
     """The session's turn_rows(), as a script for searches, loaded once something is typed (a script,
-    unlike fetch(), can also be loaded by pages opened as files). The server reads it to save stars.
+    unlike fetch(), can also be loaded by pages opened as files). The server reads it to save marks.
     """
     return f'ccSearch({json.dumps({"session": session, "turns": turn_rows(turns)})});\n'
 
@@ -549,59 +590,67 @@ def search_rows(path: Path) -> list:
 
 
 @contextlib.contextmanager
-def starred_lock():
-    """Held while reading and rewriting STARRED (by the server and by runs regenerating pages)."""
+def marks_lock():
+    """Held while reading and rewriting the MARKS files and <page>.marks.js files (by the server, and by
+    runs regenerating pages).
+    """
     OUT_ROOT.mkdir(parents=True, exist_ok=True)
-    with (OUT_ROOT / '.starred.lock').open('w') as f:
+    with (OUT_ROOT / '.marks.lock').open('w') as f:
         fcntl.flock(f, fcntl.LOCK_EX)
         yield
 
 
-def load_starred() -> dict:
-    """STARRED: {"rev": number of star changes so far, "entries": [one per starred turn, oldest first]}."""
+def load_marks(kind: str) -> dict:
+    """MARKS[kind]: {"rev": number of changes so far, "entries": [one per marked turn, oldest first]}."""
     try:
-        data = json.loads(STARRED.read_text())
+        data = json.loads(MARKS[kind].read_text())
         return dict(rev=int(data.get('rev', 0)), entries=list(data.get('entries', [])))
     except (OSError, ValueError, AttributeError):
         return dict(rev=0, entries=[])
 
 
-def write_stars_js(page: Path, data: dict, session: str) -> tuple:
-    """Writes <page>.stars.js (the keys of the session's starred turns and data's rev, for its page) if
-    that changes it. Returns (keys, rev).
+def save_marks(kind: str, data: dict) -> None:
+    write_atomic(MARKS[kind], json.dumps(data, indent=1, ensure_ascii=False) + '\n')
+
+
+def write_marks_js(page: Path, session: str, data: dict) -> dict:
+    """Writes <page>.marks.js, for its page and searches of it, if that changes it: the keys of the
+    session's turns of each kind in data ({kind: load_marks(kind)}) and each kind's rev, as
+    ccMarks({"session": ..., "star": {"keys": [...], "rev": ...}, "hide": {...}}). Returns that object.
     """
-    keys = [e['key'] for e in data['entries'] if e.get('session') == session]
-    path, text = page.with_suffix('.stars.js'), f'ccStars({json.dumps(keys)},{data["rev"]});\n'
+    marks = dict(session=session, **{kind: dict(keys=[e['key'] for e in d['entries'] if e.get('session') == session],
+        rev=d['rev']) for kind, d in data.items()})
+    path, text = page.with_suffix('.marks.js'), f'ccMarks({json.dumps(marks)});\n'
     try:
         same = path.read_text() == text
     except OSError:
         same = False
     if not same:
         write_atomic(path, text)
-    return keys, data['rev']
+    page.with_suffix('.stars.js').unlink(missing_ok=True)   # what earlier versions wrote instead
+    return marks
 
 
-def read_stars_js(page: Path):
-    """(keys, rev) from <page>.stars.js (None if missing)."""
+def read_marks_js(page: Path) -> dict | None:
+    """The object in <page>.marks.js (None if missing)."""
     try:
-        text = page.with_suffix('.stars.js').read_text()
-        keys, rev = json.loads('[' + text[text.index('(') + 1:text.rindex(')')] + ']')
-        return keys, rev
+        text = page.with_suffix('.marks.js').read_text()
+        return json.loads(text[text.index('(') + 1:text.rindex(')')])
     except (OSError, ValueError):
         return None
 
 
-def star_entry(page: Path, info: dict, row: list) -> dict:
-    """What STARRED keeps of a starred turn (a turn_rows() row of the session page at page)."""
+def mark_entry(page: Path, info: dict, row: list) -> dict:
+    """What the MARKS files keep of a turn (a turn_rows() row of the session page at page)."""
     return dict(project=info.get('project', ''), session=page.stem, name=info.get('name', ''),
         page=page.relative_to(OUT_ROOT).as_posix() if page.is_relative_to(OUT_ROOT) else str(page),
         turn=row[0], key=row[5], label=row[1], time=row[4], prompt=row[2], answer=row[3])
 
 
-def set_star(page: Path, key: str, turn: str, on: bool):
-    """Stars (on) or unstars the turn with key (or else the id turn) of the session page at page, in
-    STARRED and <page>.stars.js. Returns (keys of the session's starred turns, rev), or None if the
-    turn is not in the page's search_js() file.
+def set_mark(kind: str, page: Path, key: str, turn: str, on: bool) -> dict | None:
+    """Marks (on) or unmarks as kind ('star' or 'hide') the turn with key (or else the id turn) of the
+    session page at page, in MARKS[kind] and <page>.marks.js. Returns write_marks_js()'s object, or None if
+    the turn is not in the page's search_js() file.
     """
     rows = search_rows(page.with_suffix('.search.js'))
     row = next((r for r in rows if len(r) > 5 and r[5] == key), None) or next((r for r in rows if r[0] == turn), None)
@@ -609,38 +658,42 @@ def set_star(page: Path, key: str, turn: str, on: bool):
         return None
     if len(row) < 6:   # from before rows had a time and a key
         row = [*row[:4], '', key]
-    with starred_lock():
-        data = load_starred()
-        data['entries'] = [e for e in data['entries'] if not (e.get('session') == page.stem and e.get('key') == row[5])]
+    with marks_lock():
+        data = {k: load_marks(k) for k in MARKS}
+        d = data[kind]
+        d['entries'] = [e for e in d['entries'] if not (e.get('session') == page.stem and e.get('key') == row[5])]
         if on:
-            data['entries'].append(dict(star_entry(page, session_info(page) or {}, row),
-                starred=f'{dt.datetime.now():%Y-%m-%d %H:%M:%S}'))
-        data['rev'] += 1
-        write_atomic(STARRED, json.dumps(data, indent=1, ensure_ascii=False) + '\n')
-        return write_stars_js(page, data, page.stem)
+            d['entries'].append(dict(mark_entry(page, session_info(page) or {}, row),
+                **{MARKED_FIELD[kind]: f'{dt.datetime.now():%Y-%m-%d %H:%M:%S}'}))
+        d['rev'] += 1
+        save_marks(kind, d)
+        return write_marks_js(page, page.stem, data)
 
 
-def sync_stars(page: Path, session: str, name: str, rows: list) -> None:
+def sync_marks(page: Path, session: str, name: str, rows: list) -> None:
     """After a run rewrote a session page: updates the prompts and answers (etc.) of the session's entries
-    in STARRED from its turn_rows(), and writes <page>.stars.js.
+    in the MARKS files from its turn_rows(), and writes <page>.marks.js.
     """
-    with starred_lock():
-        data = load_starred()
+    with marks_lock():
+        data = {k: load_marks(k) for k in MARKS}
         by_key = {r[5]: r for r in rows}
-        changed = False
-        for e in data['entries']:
-            row = by_key.get(e.get('key')) if e.get('session') == session else None
-            if row:
-                new = dict(e, name=name, turn=row[0], label=row[1], time=row[4], prompt=row[2], answer=row[3])
-                if new != e:
-                    e.update(new); changed = True
-        if changed:
-            write_atomic(STARRED, json.dumps(data, indent=1, ensure_ascii=False) + '\n')
-        write_stars_js(page, data, session)
+        for kind, d in data.items():
+            changed = False
+            for e in d['entries']:
+                row = by_key.get(e.get('key')) if e.get('session') == session else None
+                if row:
+                    new = dict(e, name=name, turn=row[0], label=row[1], time=row[4], prompt=row[2], answer=row[3])
+                    if new != e:
+                        e.update(new); changed = True
+            if changed:
+                save_marks(kind, d)
+        write_marks_js(page, session, data)
 
 
-def render(turns, name: str, source: Path, project: Path, header: str, root: str) -> str:
-    """The session page (for write_page()). root is the URL of OUT_ROOT relative to the page."""
+def render(turns, name: str, source: Path, project: Path, header: str, root: str, marks: str) -> str:
+    """The session page (for write_page()). root is the URL of OUT_ROOT relative to the page, and marks
+    that of its write_marks_js() file.
+    """
     prompts = [t for t in turns if t['kind'] == 'prompt']
     n = len(prompts)
     title = f'{name} · Claude Code session {source.stem[:8]} ({project.name})'
@@ -649,11 +702,15 @@ def render(turns, name: str, source: Path, project: Path, header: str, root: str
         first=prompts[0]['time'] if prompts else '', last=prompts[-1]['time'] if prompts else '')
     meta = f'<meta name="claude-conversation" content="{html.escape(json.dumps(info), quote=True)}">'
     nav, body = [], []
-    star = '<button class="star" onclick="star(this)">\u2606</button>'
+    # (button labels are CSS, from data-l, so that the page's search does not find them)
+    star = '<button class="star" data-l="\u2606" onclick="mark(this,\'star\')"></button>'
+    hide = '<button class="hide" data-l="hide" onclick="mark(this,\'hide\')"></button>'
+    copy = lambda id: f'<button class="copy" data-l="copy" onclick="cp(\'{id}\',this)"></button>'
     for i, (t, label) in enumerate(zip(turns, turn_labels(turns))):
-        tid = f't{i}'
+        tid, key = f't{i}', html.escape(t.get('key') or f't{i}')
         snippet = html.escape(t['prompt'][:90].replace('\n', ' '))
-        nav.append(f'<a href="#{tid}" data-i="{i}"><span class="st">\u2605 </span><b>{label}</b> <small>{t["time"]}</small><br>{snippet}</a>')
+        nav.append(f'<a href="#{tid}" data-i="{i}" data-key="{key}"><span class="st">\u2605 </span><b>{label}</b> '
+            f'<small>{t["time"]}</small><br>{snippet}</a>')
         raw = html.escape(t['answer'], quote=True)
         inter = ''
         def fold(items, title):
@@ -668,21 +725,26 @@ def render(turns, name: str, source: Path, project: Path, header: str, root: str
             n_ev = sum(1 for k, _ in t['later'] if k == 'event'); n_as = len(t['later']) - n_ev
             inter += fold(t['later'], f'{n_ev} background events after the answer, {n_as} short replies to them')
         prompt_html = html.escape(t['prompt'] if t['kind'] == 'prompt' else t['prompt'][:600] + ' ...')
-        body.append(f'<section class="turn {t["kind"]}-turn" id="{tid}" data-key="{html.escape(t.get("key") or tid)}">'
-            f'<div class="prompt"><div class="k">{star}{label} · {t["time"]}</div>{prompt_html}</div>'
-            f'<div class="answer" id="a{i}" data-raw="{raw}">{star}<button class="copy" onclick="cp(\'a{i}\',this)">copy answer</button>'
+        body.append(f'<section class="turn {t["kind"]}-turn" id="{tid}" data-key="{key}">'
+            f'<div class="prompt" id="p{i}" data-raw="{html.escape(t["prompt"], quote=True)}"><div class="k">{star}{hide}{copy(f"p{i}")}'
+            f'{label} · {t["time"]}</div>{prompt_html}</div>'
+            f'<div class="answer" id="a{i}" data-raw="{raw}">{star}{copy(f"a{i}")}'
             f'{md(t["answer"]) if t["answer"] else "<p><i>(no final text; see the notes below)</i></p>"}</div>{inter}</section>')
     return (f'<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">{stamp_meta()}{meta}<title>{html.escape(title)}</title>'
-        f'<style>{CSS}</style>{NAV_STATE_JS}</head><body data-root="{html.escape(root)}" data-session="{html.escape(source.stem)}">'
+        f'<style>{CSS}</style>{HEAD_JS}<script src="{html.escape(urllib.parse.quote(marks))}"></script>'
+        '<script>if(ccMarksQ.length)ccHideStyle((ccMarksQ[0].hide||{}).keys||[])</script>'
+        f'</head><body data-root="{html.escape(root)}" data-session="{html.escape(source.stem)}">'
         f'{header}<div class="cols"><nav><input id="q" placeholder="search prompts and answers" oninput="flt()">'
-        '<label><input type="checkbox" id="starfirst" checked onchange="sortNav()">starred first</label>'
+        '<div class="opts"><label><input type="checkbox" id="starfirst" checked onchange="sortNav()">starred first</label>'
+        '<label><input type="checkbox" id="showhid" onchange="showHidden()">show hidden</label> <small id="nhid"></small></div>'
         + '\n'.join(nav) + f'</nav><main><div class="meta"><button id="navbtn" onclick="toggleNav()"></button>{html.escape(title)} · {n} prompts · source {html.escape(str(source))}</div>'
         '<div class="scroll"><div id="others" hidden></div>' + '\n'.join(body) + f'</div></main></div><script>{SEARCH_JS}{JS}{live_js()}</script></body></html>')
 
 
 INDEX_CSS = ROOT_CSS + """
 body{margin:0 auto;max-width:1100px;padding:18px 28px 60px;background:var(--bg);color:var(--ink);font:15px/1.5 -apple-system,"Segoe UI",Helvetica,Arial,sans-serif}
-input{width:100%;box-sizing:border-box;padding:6px 8px;margin:6px 0 14px;border:1px solid var(--line);border-radius:6px;background:var(--soft);color:var(--ink)}
+#q{width:100%;box-sizing:border-box;padding:6px 8px;margin:6px 0 4px;border:1px solid var(--line);border-radius:6px;background:var(--soft);color:var(--ink)}
+.opts{font-size:.85em;color:var(--muted);margin-bottom:12px} .opts label{cursor:pointer} .opts input{vertical-align:-2px;margin:0 4px 0 2px}
 h2{font-size:1em;color:var(--muted);margin:22px 0 4px;font-weight:normal} .meta{color:var(--muted);font-size:.85em}
 header{padding:0 0 4px;margin-bottom:12px}
 table{border-collapse:collapse;width:100%} th,td{border-bottom:1px solid var(--line);padding:4px 8px;text-align:left;vertical-align:top;font-size:.92em}
@@ -692,10 +754,15 @@ tr.hits div{margin:3px 0;overflow-wrap:anywhere} mark{background:#ffe58a;color:#
 """
 
 # The index's search: on the first query, loads every session's <session>.search.js, then lists under
-# each session row the turns whose prompt or answer contains the query (case-insensitively). An empty
-# box shows the plain list again. The query survives reloads.
+# each session row the turns whose prompt or answer contains the query (case-insensitively), leaving out
+# hidden turns unless "show hidden" is ticked. An empty box shows the plain list again. The query survives
+# reloads. Each session's <session>.marks.js is loaded with the page (and again when it is shown), for the
+# number of hidden turns.
 INDEX_JS = """
-const Q=document.getElementById('q'),MAX=6;let loaded=false;
+const Q=document.getElementById('q'),SH=document.getElementById('showhid'),MAX=6;let loaded=false;
+try{SH.checked=localStorage.ccShowHidden==='1';}catch(e){}
+document.documentElement.classList.toggle('hidehid',!SH.checked);
+SH.onchange=()=>{try{localStorage.ccShowHidden=SH.checked?'1':'';}catch(e){}document.documentElement.classList.toggle('hidehid',!SH.checked);flt();};
 async function flt(){
  const q=Q.value.trim().toLowerCase(),rows=[...document.querySelectorAll('tr[data-s]')];
  try{sessionStorage.ccIndexQ=Q.value;}catch(e){}
@@ -704,14 +771,21 @@ async function flt(){
  await Promise.all(rows.map(r=>ccLoad(r.dataset.search)));loaded=true;
  if(Q.value.trim().toLowerCase()!==q)return;   // typed on meanwhile
  for(const r of rows){
-  const hits=r.nextElementSibling,href=esc(r.dataset.href),m=ccMatches(r.dataset.session,q);
+  const hits=r.nextElementSibling,href=esc(r.dataset.href),m=ccMatches(r.dataset.session,q),nh=ccMatches(r.dataset.session,q,true).length-m.length;
   const lines=m.slice(0,MAX).map(([t,what,text,at])=>`<div><a href="${href}#${t.id}">${t.label} ${what}</a> ${snip(text,at,q.length)}</div>`);
   if(m.length>MAX)lines.push(`<div><a href="${href}#q=${encodeURIComponent(Q.value.trim())}">${m.length-MAX} more (open the session with this search)</a></div>`);
   hits.firstElementChild.innerHTML=!(r.dataset.session in ccData)?'<i>not searchable: re-run claude-conversation in its project</i>'
-   :m.length?lines.join(''):'no matches in prompts or answers';
+   :m.length?lines.join(''):'no matches in prompts or answers'+(nh?` (except ${nh} match${nh>1?'es':''} in hidden turns)`:'');
   r.classList.toggle('nomatch',!m.length&&!r.innerText.toLowerCase().includes(q));hits.hidden=false;}
 }
+async function hiddenCount(){
+ const rows=[...document.querySelectorAll('tr[data-s]')];
+ await Promise.all(rows.map(r=>ccLoadNow(r.dataset.marks)));
+ const n=rows.reduce((n,r)=>n+(((ccMarksOf[r.dataset.session]||{}).hide||{}).keys||[]).length,0);
+ document.getElementById('nhid').textContent='('+n+' hidden turn'+(n==1?'':'s')+' in these sessions)';
+ if(Q.value.trim())flt();}
 try{if(sessionStorage.ccIndexQ){Q.value=sessionStorage.ccIndexQ;flt();}}catch(e){}
+hiddenCount();document.addEventListener('visibilitychange',()=>{if(!document.hidden)hiddenCount();});
 """
 
 
@@ -740,11 +814,12 @@ def index_page(header: str, keep=None, note: str = '') -> tuple:
         if info:
             info['href'] = str(page.relative_to(OUT_ROOT))
             info['search'] = f'{page.relative_to(OUT_ROOT).with_suffix(".search.js")}?v={page_stamp(page)[0] or ""}'
+            info['marks'] = str(page.relative_to(OUT_ROOT).with_suffix('.marks.js'))
             by_project.setdefault(info['project'], []).append(info)
     parts = []
     for project, infos in sorted(by_project.items(), key=lambda kv: max(i['last'] for i in kv[1]), reverse=True):
         rows = ''.join(f'<tr data-s data-session="{html.escape(i["session"])}" data-href="{html.escape(i["href"])}" '
-            f'data-search="{html.escape(i["search"])}"><td><a href="{html.escape(i["href"])}">{html.escape(i["name"])}</a></td>'
+            f'data-search="{html.escape(i["search"])}" data-marks="{html.escape(i["marks"])}"><td><a href="{html.escape(i["href"])}">{html.escape(i["name"])}</a></td>'
             f'<td class="n">{i["prompts"]}</td><td>{i["first"]}</td><td>{i["last"]}</td><td><small>{i["session"][:8]}</small></td></tr>'
             f'<tr class="hits" hidden><td colspan="5"></td></tr>'
             for i in sorted(infos, key=lambda i: i['last'], reverse=True))
@@ -755,7 +830,9 @@ def index_page(header: str, keep=None, note: str = '') -> tuple:
     page = (f'<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">{stamp_meta()}<title>Claude Code sessions</title>'
         f'<style>{INDEX_CSS}</style></head><body>{header}<div class="meta">{plural(n, "rendered session")} in '
         f'{plural(len(by_project), "project")} · {note}</div>'
-        f'<input id="q" placeholder="search all prompts and answers (and session names)" oninput="flt()">' + '\n'.join(parts)
+        f'<input id="q" placeholder="search all prompts and answers (and session names)" oninput="flt()">'
+        '<div class="opts"><label><input type="checkbox" id="showhid">show hidden turns</label> <small id="nhid"></small></div>'
+        + '\n'.join(parts)
         + f'<script>{SEARCH_JS}{INDEX_JS}{live_js()}</script></body></html>')
     sessions = [{k: i[k] for k in ('session', 'name', 'project', 'href', 'search')}
         for _, infos in sorted(by_project.items(), key=lambda kv: max(i['last'] for i in kv[1]), reverse=True)
@@ -804,9 +881,9 @@ def scope_note(scope: list) -> str:
 class QuietHandler(http.server.SimpleHTTPRequestHandler):
     """Serves the files of the sessions in the server's scope under OUT_ROOT, and an index page and
     sessions.js listing those only. Also /_alive, which open pages ask whether they have been
-    regenerated and for their stars (which tells the server they are open), /_status (the open tabs
-    etc., for the command line), and, by POST, /_star (stars or unstars a turn) and /_scope (adds a
-    later run's sessions to those shown).
+    regenerated and for their marks (which tells the server they are open), /_status (the open tabs
+    etc., for the command line), and, by POST, /_mark (stars or hides a turn, or undoes that) and /_scope
+    (adds a later run's sessions to those shown).
     """
     server_version = 'claude-conversation'   # lets server_status() recognize its own server
 
@@ -843,8 +920,8 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
             page = Path(self.translate_path(page))
             version, generated = page_stamp(page)
             answer = {'version': version, 'generated': generated, 'restart': srv.restart}
-            if stars := read_stars_js(page):
-                answer.update(stars=stars[0], stars_rev=stars[1])
+            if marks := read_marks_js(page):
+                answer['marks'] = marks
             return self.send_json(answer)
         if path == '/_status':
             return self.send_json({'tabs': open_tabs(srv), 'watch': watch_running(), 'api': SERVER_API, 'scope': srv.scope})
@@ -864,14 +941,13 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
         except ValueError:
             return self.send_error(400)
         path = urllib.parse.urlsplit(self.path).path
-        if path == '/_star' and isinstance(body, dict):
+        if path == '/_mark' and isinstance(body, dict) and body.get('kind') in MARKS:
             page = urllib.parse.unquote(str(body.get('page', '')))
             if not (page.endswith('.html') and in_scope(srv.scope, page)):
                 return self.send_error(404)
-            result = set_star(Path(self.translate_path(page)), str(body.get('key', '')), str(body.get('turn', '')), bool(body.get('on')))
-            if result is None:
-                return self.send_error(404)
-            return self.send_json({'stars': result[0], 'rev': result[1]})
+            marks = set_mark(body['kind'], Path(self.translate_path(page)), str(body.get('key', '')),
+                str(body.get('turn', '')), bool(body.get('on')))
+            return self.send_error(404) if marks is None else self.send_json(marks)
         if path == '/_scope' and isinstance(body, list):
             with srv.lock:
                 for x in body:
@@ -1250,8 +1326,8 @@ def main() -> None:
                 index_href = urllib.parse.quote(Path(os.path.relpath(OUT_ROOT / 'index.html', out.parent.resolve())).as_posix())
                 write_atomic(out.with_suffix('.search.js'), search_js(turns, f.stem))
                 write_page(out, render(turns, name, f, args.project.resolve(), header_html(server, index_href),
-                    index_href.removesuffix('index.html')))
-                sync_stars(out, f.stem, name, turn_rows(turns))
+                    index_href.removesuffix('index.html'), out.with_suffix('.marks.js').name))
+                sync_marks(out, f.stem, name, turn_rows(turns))
                 if args.verbose:
                     print(f'{url_for(out, base) if base else out}  "{name}"  ({plural(len(prompts), "prompt")})', flush=True)
             index, n_sessions, n_projects = write_index(header_html(server))
