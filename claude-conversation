@@ -1493,8 +1493,7 @@ def main() -> None:
         return out
     base, asked = None, []   # asked: set once Ctrl+C in a --watch run asked what to do with the server, and the run is ending
     if args.serve:
-        scope = scope_of(picked)
-        status = ensure_server(args.port, scope, sessions.extra)
+        status = ensure_server(args.port, scope_of(picked), sessions.extra)
         atexit.register(at_exit_with_server, args.port, started=status == 'started', watch=bool(args.watch), asked=asked)
         base = server_base(args.port)
         if args.verbose:
@@ -1504,10 +1503,9 @@ def main() -> None:
         try:
             if not first_pass:
                 picked = sessions.pick()
-                if args.serve and (new := [x for x in scope_of(picked) if x not in scope]):
-                    scope += new
-                    with contextlib.suppress(OSError):   # (the server may be gone)
-                        post_json(args.port, '/_scope', new)
+                if args.serve:   # (again each time: the server may have been restarted by another run since)
+                    with contextlib.suppress(OSError):   # (or be gone)
+                        post_json(args.port, '/_scope', scope_of(picked))
             outs = []
             for f, project, slug in picked:
                 out = OUT_ROOT / slug / f'{f.stem}.html'
