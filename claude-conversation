@@ -1,48 +1,47 @@
 #!/usr/bin/env python3
 """Renders a Claude Code session transcript as a simple prompt / answer page.
 
-Which sessions you get depends on where you run it: the project is the current directory (or --project),
-and the page is of its most recently active session, or of the most recent one whose id starts with
---session; --all renders all of them (or all those matching --session). With --serve, the server only
-shows that project's rendered sessions (including ones rendered by earlier runs), or with --session only
-the sessions rendered this time; a later --serve run using the same server adds its own. Pages opened as
-files are not limited like that: their index (~/.claude/conversations/index.html) lists every session
-rendered so far, from any project.
+Which sessions you get depends on where you run it. Run from Claude Code (e.g. with its `!` prefix), you
+get the session you are in, and the project is that session's. Otherwise the project is the current
+directory (where `claude` was started), or else the nearest directory above it that is one, and you get
+its most recently active session. -p/--project picks another project. -s/--session picks the most recent
+of its sessions whose id starts with the given text, and -a/--all all its sessions (or all those matching
+-s). -r/--recursive also renders the projects in the directories below the project's (or below the
+current directory, even if it is not one), at most -d/--depth levels down (3 by default; 0: no limit):
+the latest session of each, unless -a or -s. -w/--watch picks again on every pass (unless you get the
+session you are in, or -s), so it follows new sessions. With -e/--serve, the server only shows the
+rendered sessions of those projects (including ones rendered by earlier runs), or with -s only the
+sessions rendered this time; a later -e run using the same server adds its own. Pages opened as files are
+not limited like that: their index (~/.claude/conversations/index.html) lists every session rendered so
+far, from any project.
 
-Reads the session's JSONL under ~/.claude/projects/<project-slug>/ and writes a
-self-contained HTML file: a numbered list of your prompts (sidebar, with a search box; a
-button hides it and shows it again, remembered across pages) and, for each, the assistant's
-final answer rendered from markdown with a "copy" button; intermediate assistant text
-(progress notes between tool calls, replies to background notifications) is folded under each
-turn. Tool calls, tool results and thinking are left out. Stdlib only.
+Reads the session's JSONL under ~/.claude/projects/<project-slug>/ and writes an HTML page: a numbered
+list of your prompts (sidebar, with a search box; a button hides it and shows it again, remembered across
+pages) and, for each, the assistant's final answer rendered from markdown with a "copy" button;
+intermediate assistant text (progress notes between tool calls, replies to background notifications) is
+folded under each turn. Tool calls, tool results and thinking are left out. Stdlib only.
 
-Usage (from the project directory, e.g. with Claude Code's `!` prefix, whose output is added to the
-conversation's context; with respondToBashCommands false in settings.json Claude does not reply to it):
-    claude-conversation                 # latest session of this directory -> HTML, prints its file:// URL
-    claude-conversation --open          # ... and open it in the browser
-    claude-conversation --session <id-prefix> | --jsonl <file> | --all   # other sessions
-    claude-conversation --watch --open  # regenerate every 30 s (--watch SEC: every SEC s) until Ctrl+C
-    claude-conversation --serve         # ... and print an http:// URL instead (see below)
+Usage (e.g. with Claude Code's `!` prefix, whose output is added to the conversation's context; with
+respondToBashCommands false in settings.json Claude does not reply to it):
+    claude-conversation                 # this session (else this directory's latest) -> HTML, prints its URL
+    claude-conversation -o              # ... and open it in the browser (--open)
+    claude-conversation -s <id-prefix> | -a | -r | -j <file>   # other sessions (see above)
+    claude-conversation -w -o           # regenerate every 30 s (-w SEC: every SEC s) until Ctrl+C (--watch)
+    claude-conversation -e              # ... and print an http:// URL instead (--serve; see below)
     claude-conversation --stop-server
-Output: ~/.claude/conversations/<project-slug>/<session-id>.html (override with --out), and next to it
-<session-id>.search.js (its prompts and answers, for searches) and <session-id>.version.js. Every run
+Output: ~/.claude/conversations/<project-slug>/<session-id>.html, and next to it <session-id>.search.js
+(its prompts and answers, for searches), <session-id>.marks.js and <session-id>.version.js. Every run
 also rewrites ~/.claude/conversations/index.html, which links every session page under that directory
 (all projects, grouped by project); its search box searches all their prompts and answers, listing the
 matches under each session. When a session page's search has no match, it lists the other sessions that
 have one, linking to the same search there (from ~/.claude/conversations/sessions.js, also rewritten
-every run). Only one file:// URL is printed: the page's, or the index's if several sessions were
-rendered. With -v, one line per session is printed instead (HTML path, the session's name as `/resume`
-lists it, and its prompt count), then the index URL. --open uses xdg-open on each generated page, so it
-does nothing useful over SSH: open the printed URL instead. Each page starts with a title line, "claude
-conversations" (linking to the index from session pages), followed by when it was generated and, with
---serve, the server's address, host name and pid.
-
-Open pages, served or opened as files, check every 2 s whether they have been regenerated (by any run:
---watch, a re-run, or e.g. a Claude Code Stop hook). The generation time in their title line follows
-along, and when the content has changed they reload, unless a search is in progress (text in the search
-box, or the cursor in it): then a notice with a reload button says the page has changed, and it reloads
-once the box is empty and left. A page's version is a hash of its content (apart from the title line),
-so regenerating it unchanged does not reload it.
+every run). Only one URL is printed: the page's, or the index's if several sessions were rendered (and,
+with -w, then the URL of each session that shows up later). With -v, one line per session is printed
+instead (HTML path, the session's name as `/resume` lists it, and its prompt count), then the index URL.
+--open uses xdg-open on each generated page, so it does nothing useful over SSH: open the printed URL
+instead. Each page starts with a title line, "claude conversations" (linking to the index from session
+pages), followed by when it was generated and, when served, the address it was reached at, the host name
+and the server's pid.
 
 At its top right, each prompt has "copy", "hide" and star buttons, and each answer "copy" and a star.
 Either star stars (or unstars) the turn, and "hide" hides the turn (prompt and answer) or shows it again.
@@ -54,19 +53,21 @@ show them but cannot change them), with their prompts and answers, to ~/.claude/
 and .hidden.json, whose entries later runs keep up to date with the transcript (e.g. an answer that was
 still being written).
 
---serve starts a background HTTP server for ~/.claude/conversations on all interfaces (port 10041 by
+-e/--serve starts a background HTTP server for ~/.claude/conversations on all interfaces (port 10041 by
 default; --port), unless it is already running, and prints http:// URLs instead of file:// ones. Their
 host is the address this machine was reached at over SSH (from $SSH_CONNECTION, so the link works from
-the SSH client's browser), else localhost. The server only serves the sessions of the run's project (the
-current directory, or --project), or with --session / --jsonl only those sessions; a later --serve run
-using the same server adds its own (the index it serves lists only these). It has no access control:
-anyone who can reach the port can read those. When the server cannot be reached, pages viewed through it
-say so below their title line, with the command (and directory) that started it, to restart it. The
-server runs until --stop-server, or until it has gone 30 min with no page open and no
-`claude-conversation --watch` running. A running server from an older version of this script is
-replaced. Ctrl+C in a --watch run in a terminal asks what to do: stop the server and exit (the default,
-also on another Ctrl+C), "n" to carry on watching (the question is then cleared), or "b" to exit and
-leave the server running in the background.
+the SSH client's browser), else localhost. The server only serves the sessions of the run's projects, or
+with -s / -j only those sessions (see above). Runs sharing a server (the same port) add theirs to those
+it shows, and its index lists them all, until it stops. A run without -e only warns when a server is
+running that does not show its pages. The server has no access control: anyone who can reach the port can
+read what it shows. When it cannot be reached, pages viewed through it say so below their title line, with
+the command (and directory) of the run that started it, to restart it (with that run's sessions only).
+The server runs until --stop-server, or until it has gone 30 min with no page open and no
+`claude-conversation -w` running. A running server from an older version of this script is replaced.
+Ctrl+C in a -w -e run in a terminal asks what to do: stop the server and exit (the default, also on
+another Ctrl+C), "n" to carry on watching (the question is then cleared), or "b" to exit and leave the
+server running in the background. When another -w -e run uses the same server, the question says so and
+the default (also on another Ctrl+C) is "b" instead, so the other run keeps its server; "y" stops it.
 """
 from __future__ import annotations
 
@@ -76,10 +77,12 @@ import contextlib
 import datetime as dt
 import fcntl
 import functools
+import glob
 import hashlib
 import html
 import http.client
 import http.server
+import io
 import json
 import os
 import re
@@ -99,6 +102,7 @@ PROJECTS = Path.home() / '.claude' / 'projects'
 OUT_ROOT = Path.home() / '.claude' / 'conversations'
 SERVER_PORT = 10041
 WATCH_INTERVAL = 30       # seconds between --watch passes, unless given
+RECURSE_DEPTH = 3         # how many directories -r looks down, unless given
 IDLE_TIMEOUT = 30 * 60   # the server stops itself after this long with no page open and no --watch run
 TAB_TIMEOUT = 3 * 60     # a tab counts as open while it has asked within this long (hidden tabs ask less often)
 VERSION_TAG = 'claude-conversation-version'
@@ -403,13 +407,15 @@ def write_page(path: Path, page: str) -> None:
     write_atomic(path.with_suffix('.version.js'), f'ccVersion({json.dumps(version)},{json.dumps(now)});\n')
 
 
-def header_html(server: str | None, index_href: str | None = None) -> str:
+SERVER_SLOT = '<span id="srv"></span>'   # filled in by the server (QuietHandler.fill_title()) when it sends the page
+
+
+def header_html(index_href: str | None = None) -> str:
     """The title line at the top of every page: "claude conversations" (linking to index_href, if
-    given), then, de-emphasized, the server description (when serving) and the generation time.
+    given), then, de-emphasized, the server's details (when served) and the generation time.
     """
     title = f'<a href="{html.escape(index_href)}">claude conversations</a>' if index_href else 'claude conversations'
-    server = f'{html.escape(server)} · ' if server else ''
-    return (f'<header><b>{title}</b><span>{server}generated <time id="gen">{GENERATED_SLOT}</time></span></header>'
+    return (f'<header><b>{title}</b><span>{SERVER_SLOT}generated <time id="gen">{GENERATED_SLOT}</time></span></header>'
         '<div id="live" hidden></div>')
 
 
@@ -935,12 +941,26 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
         if path == '/_status':
             return self.send_json({'tabs': open_tabs(srv), 'watch': watch_running(), 'api': SERVER_API, 'scope': srv.scope})
         if path in ('/', '/index.html'):
-            return self.send_body(scoped_index(srv)['page'], 'text/html; charset=utf-8', head)
+            return self.send_body(self.fill_title(scoped_index(srv)['page']), 'text/html; charset=utf-8', head)
         if path == '/sessions.js':
             return self.send_body(scoped_index(srv)['sessions'], 'text/javascript; charset=utf-8', head)
         if not in_scope(srv.scope, path):
             return self.send_error(404)
+        if path.endswith('.html'):
+            try:
+                page = Path(self.translate_path(path)).read_bytes()
+            except OSError:
+                return self.send_error(404)
+            return self.send_body(self.fill_title(page), 'text/html; charset=utf-8', head)
         super().do_HEAD() if head else super().do_GET()
+
+    def fill_title(self, page: bytes) -> bytes:
+        """page with this server's details in its title line: the address the browser reached it at, the
+        host name and the pid (so they are right whichever run wrote the page).
+        """
+        where = self.headers.get('Host') or server_base(self.server.server_address[1]).removeprefix('http://')
+        details = f'served from {where} on {socket.gethostname()} · server pid {os.getpid()} · '
+        return page.replace(SERVER_SLOT.encode(), f'<span id="srv">{html.escape(details)}</span>'.encode(), 1)
 
     def do_POST(self):
         srv = self.server
@@ -992,7 +1012,7 @@ def scoped_index(srv) -> dict:
         key = (mtime, json.dumps(scope))
         if srv.index_cache and srv.index_cache['key'] == key:
             return srv.index_cache
-    page, sessions, _ = index_page(header_html(server_description(srv.server_address[1], os.getpid())),
+    page, sessions, _ = index_page(header_html(),
         lambda slug, session: in_scope(scope, f'/{slug}/{session}.html'), scope_note(scope))
     text, version, generated = stamp_page(page, page_stamp(index)[1])
     cache = dict(key=key, page=text.encode(), version=version, generated=generated, sessions=sessions_js(sessions).encode())
@@ -1010,19 +1030,38 @@ def open_tabs(srv) -> list:
         return [dict(x, seen=round(now - x['seen']), tab=t) for t, x in srv.tabs.items()]
 
 
-def watch_running() -> bool:
-    """Whether a `claude-conversation --watch` process is running on this machine."""
-    name = os.path.basename(__file__)
+def script_runs() -> list:
+    """(pid, parsed arguments) of each run of this script on this machine (not servers), from /proc."""
+    name, runs = os.path.basename(__file__), []
     for d in Path('/proc').iterdir():
         if not d.name.isdigit():
             continue
         try:
-            args = (d / 'cmdline').read_bytes().decode(errors='replace').split('\0')
+            argv = (d / 'cmdline').read_bytes().decode(errors='replace').split('\0')[:-1]
         except OSError:
             continue
-        if any(os.path.basename(a) == name for a in args) and any(a == '--watch' or a.startswith('--watch=') for a in args):
-            return True
-    return False
+        # the script run by python (directly or through its #!), not e.g. an editor or a shell command line
+        i = next((i for i, a in enumerate(argv[:2]) if os.path.basename(a) == name), None)
+        if i is None or (i == 1 and not os.path.basename(argv[0]).startswith('python')):
+            continue
+        try:
+            with contextlib.redirect_stderr(io.StringIO()):
+                args, _ = arg_parser().parse_known_args(argv[i + 1:])
+        except (SystemExit, argparse.ArgumentError):
+            continue
+        if not args._server:
+            runs.append((int(d.name), args))
+    return runs
+
+
+def watch_running() -> bool:
+    """Whether a `claude-conversation --watch` run is going on this machine."""
+    return any(args.watch for _, args in script_runs())
+
+
+def other_watch_runs(port: int) -> list:
+    """pids of the other --watch --serve runs using the server on port."""
+    return [pid for pid, args in script_runs() if pid != os.getpid() and args.watch and args.serve and args.port == port]
 
 
 def stop_when_idle(srv) -> None:
@@ -1080,21 +1119,22 @@ def server_files(port: int):
         Path.home() / '.claude' / f'conversation-server-{port}.log')
 
 
-def restart_command() -> str:
-    """A shell command repeating this run from the same directory (pages show it when the server
-    they came from is gone).
+def restart_command(extra: list) -> str:
+    """A shell command repeating this run from the same directory, with the arguments extra added (pages
+    show it when the server they came from is gone).
     """
     prog = sys.argv[0]
     on_path = shutil.which(os.path.basename(prog))
     if on_path and os.path.samefile(on_path, prog):
         prog = os.path.basename(prog)
-    return f'cd {shlex.quote(os.getcwd())} && {shlex.join([prog, *sys.argv[1:]])}'
+    return f'cd {shlex.quote(os.getcwd())} && {shlex.join([prog, *sys.argv[1:], *extra])}'
 
 
-def ensure_server(port: int, scope: list) -> str:
+def ensure_server(port: int, scope: list, extra: list) -> str:
     """Starts the background server on port, to show the sessions in scope (see in_scope()), unless it is
     running, in which case it adds them to those it shows. A running server from an older version of this
-    script (one without what pages now ask of it) is replaced. Returns 'started' or 'running'.
+    script (one without what pages now ask of it) is replaced. extra: for restart_command(). Returns
+    'started' or 'running'.
     """
     status = server_status(port)
     if status == 'ours':
@@ -1119,7 +1159,7 @@ def ensure_server(port: int, scope: list) -> str:
     with logfile.open('w') as log:
         proc = subprocess.Popen([sys.executable, os.path.abspath(__file__), '--_server', str(port)],
             stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True,
-            env=dict(os.environ, CLAUDE_CONVERSATION_RESTART=restart_command(), CLAUDE_CONVERSATION_SCOPE=json.dumps(scope)))
+            env=dict(os.environ, CLAUDE_CONVERSATION_RESTART=restart_command(extra), CLAUDE_CONVERSATION_SCOPE=json.dumps(scope)))
     for _ in range(50):
         if server_status(port) == 'ours':
             pidfile.write_text(f'{proc.pid}\n')
@@ -1207,18 +1247,26 @@ def at_exit_with_server(port: int, started: bool, watch: bool, asked: list) -> N
 def ask_at_ctrl_c(port: int) -> bool:
     """After Ctrl+C in a --watch --serve run in a terminal, asks whether to stop the server and exit (the
     default: anything but "n" or "b", including another Ctrl+C), carry on watching ("n": the question is
-    then cleared from the terminal), or exit leaving the server running ("b"). Returns whether to carry on.
+    then cleared from the terminal), or exit leaving the server running ("b"). When other --watch --serve
+    runs use the server, the question says so and "b" is the default instead (anything but "y" or "n").
+    Returns whether to carry on.
     """
-    how = ''
+    how, others = '', []
     try:
         if server_status(port) != 'ours':
             print(file=sys.stderr)
             return False
         tabs = server_tabs(port)
         tabs = '' if tabs is None else f', {plural(len(tabs), "tab")} open'
+        others = other_watch_runs(port)
         # over the ^C the terminal echoed
-        question = (f'stop the server (port {port}, pid {server_pid(port) or "unknown"}{tabs}) and exit? '
-            'Y / n: keep watching / b: leave it running in the background ')
+        if others:
+            question = (f'stop the server (port {port}, pid {server_pid(port) or "unknown"}{tabs}; also used by the '
+                f'--watch run{"s" if len(others) > 1 else ""} with pid {", ".join(map(str, others))}) and exit? '
+                'y / n: keep watching / B: leave it running in the background ')
+        else:
+            question = (f'stop the server (port {port}, pid {server_pid(port) or "unknown"}{tabs}) and exit? '
+                'Y / n: keep watching / b: leave it running in the background ')
         print('\r\x1b[K' + question, end='', file=sys.stderr, flush=True)
         answer = input()
     except KeyboardInterrupt:
@@ -1233,8 +1281,10 @@ def ask_at_ctrl_c(port: int) -> bool:
         print(f'\x1b[{max(rows, 1)}A\r\x1b[J', end='', file=sys.stderr, flush=True)
         return True
     signal.signal(signal.SIGINT, signal.SIG_IGN)   # answered: let the rest finish
-    if choice not in ('b', 'background'):
+    if choice in ('y', 'yes') if others else choice not in ('b', 'background'):
         print(how + stop_server(port), file=sys.stderr)
+    elif others and how:
+        print(how + 'left the server running, for the other --watch run', file=sys.stderr)
     # whatever happened above (left running, or stopping it failed), say how to stop it if it is up
     if server_status(port) == 'ours':
         print(still_running(port), file=sys.stderr)
@@ -1246,13 +1296,6 @@ def server_base(port: int) -> str:
     ssh = os.environ.get('SSH_CONNECTION', '').split()
     host = ssh[2] if len(ssh) == 4 else 'localhost'
     return f'http://{f"[{host}]" if ":" in host else host}:{port}'
-
-
-def server_description(port: int, pid: int | None = None) -> str:
-    """Where the server on port is and its pid (from its pid file unless given), for the pages' title line."""
-    pid = pid or server_pid(port)
-    return (f'served from {server_base(port).removeprefix("http://")} on {socket.gethostname()} · '
-        f'server pid {pid if pid else "unknown"}')
 
 
 def url_for(path: Path, base: str | None) -> str:
@@ -1282,89 +1325,214 @@ def find_sessions(project_dir: Path):
     return sorted(project_dir.glob('*.jsonl'), key=lambda p: p.stat().st_mtime, reverse=True)
 
 
-def main() -> None:
+def projects_below(base: Path, depth: int) -> tuple:
+    """The projects (directories Claude Code sessions were started in) that are base or at most depth
+    directories below it (any depth if depth is 0), as [(directory, its folder under PROJECTS)], and how
+    many more there are further down.
+    """
+    prefix, found, deeper = project_slug(base), [], 0
+    for folder in sorted(PROJECTS.iterdir()) if PROJECTS.is_dir() else []:
+        if not (folder.name.startswith(prefix) and folder.is_dir()):
+            continue
+        # folder names lose which characters were '/': the real directory is in the transcripts
+        project = next(filter(None, map(transcript_project, find_sessions(folder))), None)
+        if project is None or not project.is_relative_to(base):
+            continue
+        if depth and len(project.relative_to(base).parts) > depth:
+            deeper += 1
+        else:
+            found.append((project, folder))
+    return found, deeper
+
+
+class Sessions:
+    """The sessions a run renders (see the help), picked again by each --watch pass where that can change
+    (not for the Claude Code session the run is part of, -s or -j). pick() returns them as [(transcript,
+    project directory, its folder name under PROJECTS, which is also its folder under OUT_ROOT)]. notes
+    has what the first pick() found worth saying, and extra the arguments for restart_command().
+    """
+    def __init__(self, args):
+        self.args, self.notes, self.extra, self.fixed, self.first = args, [], [], None, True
+        if args.jsonl:
+            project = transcript_project(args.jsonl)
+            if project is None:
+                sys.exit(f'{args.jsonl} does not say which project it is from (it has no messages)')
+            self.fixed = [(args.jsonl, project, project_slug(project))]
+            return
+        here = project = None   # the transcript of the Claude Code session this is run from, and its project
+        if not args.project and (sid := os.environ.get('CLAUDE_CODE_SESSION_ID')):
+            here = next(PROJECTS.glob(f'*/{glob.escape(sid)}.jsonl'), None)
+            project = here and transcript_project(here)
+        if args.project:
+            self.base = args.project.resolve()
+        elif project:
+            self.base, self.extra = project, ['-p', str(project)]   # (restarting from a terminal)
+            if not (args.session or args.all or args.recursive):
+                self.fixed = [(here, project, here.parent.name)]
+                return
+        else:
+            self.base = Path.cwd().resolve()
+        if args.recursive or (PROJECTS / project_slug(self.base)).is_dir():
+            return
+        if args.project:
+            sys.exit(f'no Claude Code session was started in {self.base} (no {PROJECTS / project_slug(self.base)})')
+        up = next((d for d in self.base.parents if (PROJECTS / project_slug(d)).is_dir()), None)
+        below = len(projects_below(self.base, 0)[0])
+        hint = f' (-r renders the {plural(below, "project")} below it)' if below else ''
+        if up is None:
+            sys.exit(f'no Claude Code session was started in {self.base} or in a directory above it{hint}')
+        self.notes.append(f'note: no Claude Code session was started in {self.base}; rendering those of {up}, '
+            f'the nearest directory above it with some{hint}')
+        self.base = up
+
+    def pick(self) -> list:
+        if self.fixed is not None:
+            return self.fixed
+        args = self.args
+        if args.recursive:
+            projects, deeper = projects_below(self.base, RECURSE_DEPTH if args.depth is None else args.depth)
+            if args.depth is None and self.first:
+                left = f' ({plural(deeper, "project")} further down left out)' if deeper else ''
+                self.notes.append(f'note: -r looks at most {RECURSE_DEPTH} directories below {self.base}{left}; '
+                    '-d N to change that, -d 0 for no limit')
+        else:
+            projects = [(self.base, PROJECTS / project_slug(self.base))]
+        picked = []
+        for project, folder in projects:
+            files = find_sessions(folder)
+            if args.session:
+                files = [f for f in files if f.stem.startswith(args.session)]
+            elif not args.all:
+                files = files[:1]
+            picked += [(f, project, folder.name) for f in files]
+        if args.session:
+            if not args.all:
+                picked.sort(key=lambda x: x[0].stat().st_mtime, reverse=True)
+                if len(picked) > 1:
+                    self.notes.append(f'note: {len(picked)} sessions start with "{args.session}"; rendering the most '
+                        f'recently active one, {picked[0][0].stem} (-a for all of them)')
+                picked = picked[:1]
+            self.fixed = picked
+        self.first = False
+        return picked
+
+
+def unserved_warnings(port: int, pages: list) -> list:
+    """For each server of this script that is running (on port, or on another one, as its pid file says)
+    while this run (without --serve) did not add its pages (paths under OUT_ROOT) to those it shows: a
+    warning saying so (or a note, if it shows them anyway).
+    """
+    ports = {port} | {int(m.group(1)) for f in (Path.home() / '.claude').glob('conversation-server-*.pid')
+        if (m := re.fullmatch(r'conversation-server-(\d+)[.]pid', f.name))}
+    out = []
+    for port in sorted(ports):
+        if server_status(port) != 'ours':
+            continue
+        scope = (server_state(port) or {}).get('scope')
+        where = f'pid {server_pid(port) or "unknown"}, port {port}: {server_base(port)}/'
+        if scope is None or all(in_scope(scope, '/' + page.relative_to(OUT_ROOT).as_posix()) for page in pages):
+            out.append(f'note: the claude-conversation server that is running ({where}) shows these pages too')
+        else:
+            out.append(f'warning: a claude-conversation server is running ({where}), but this run does not add its '
+                'pages to those it shows (-e/--serve would)')
+    return out
+
+
+def arg_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description='\n\n'.join(__doc__.split('\n\n')[:2]),
         formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('--project', type=Path, help='project directory (default: the current directory)')
-    ap.add_argument('--session', help='session id, or its start, in that project (the most recent match, or all with --all)')
-    ap.add_argument('--jsonl', type=Path, help='a transcript file (one session) to render instead, as part of the '
-        'project it was recorded in, wherever this is run (so not with --project, --session or --all); with --serve, '
-        'the server shows only it')
-    ap.add_argument('--all', action='store_true', help='render every session of the project (matching --session, if given)')
-    ap.add_argument('--out', type=Path, help='output HTML path (single session)')
-    ap.add_argument('--open', action='store_true', help='open the page in the browser (xdg-open)')
-    ap.add_argument('--watch', type=int, nargs='?', const=WATCH_INTERVAL, default=0, metavar='SEC',
-        help=f'regenerate every SEC seconds (default: {WATCH_INTERVAL}) until Ctrl+C')
-    ap.add_argument('--serve', action='store_true',
-        help='start a background HTTP server (unless running) for the pages of this project (or only of the sessions '
-        'given with --session / --jsonl), and print http:// URLs')
+    ap.add_argument('-p', '--project', type=Path, help='project directory (default: that of the Claude Code session '
+        'this is run from, else the current directory, or the nearest one above it that is a project)')
+    ap.add_argument('-s', '--session', help='session id, or its start, in that project (the most recent match, or all with -a)')
+    ap.add_argument('-a', '--all', action='store_true', help='render every session of the project (matching -s, if given)')
+    ap.add_argument('-r', '--recursive', action='store_true', help='render the projects in the directory and in those '
+        'below it (see -d): the latest session of each (all with -a, or those matching -s)')
+    ap.add_argument('-d', '--depth', type=int, metavar='N', help=f'with -r, look at most N directories down '
+        f'(default: {RECURSE_DEPTH}; 0: no limit)')
+    ap.add_argument('-j', '--jsonl', type=Path, help='a transcript file (one session) to render instead, as part of the '
+        'project it was recorded in, wherever this is run (so not with -p, -s, -a or -r); with -e, the server shows only it')
+    ap.add_argument('-o', '--open', action='store_true', help='open the page in the browser (xdg-open)')
+    ap.add_argument('-w', '--watch', type=int, nargs='?', const=WATCH_INTERVAL, default=0, metavar='SEC',
+        help=f'regenerate every SEC seconds (default: {WATCH_INTERVAL}) until Ctrl+C, picking the sessions again each '
+        'time (see above); as it can take a number, put it last when combining short options (-aew, not -wae)')
+    ap.add_argument('-e', '--serve', action='store_true',
+        help='start a background HTTP server (unless running) for the pages of these projects (or only of the '
+        'sessions given with -s / -j), and print http:// URLs')
     ap.add_argument('--port', type=int, default=SERVER_PORT, help=f'port for --serve (default: {SERVER_PORT})')
     ap.add_argument('--stop-server', action='store_true', help='stop the --serve server on --port and exit')
     ap.add_argument('--_server', type=int, help=argparse.SUPPRESS)
     ap.add_argument('-v', '--verbose', action='store_true',
         help='print each page path with its session name and prompt count, then the index URL '
         '(default: only one URL, of the page or, for several sessions, of the index)')
+    return ap
+
+
+def main() -> None:
+    ap = arg_parser()
     args = ap.parse_args()
     if args._server:
         return run_server(args._server)
     if args.stop_server:
         return print(stop_server(args.port))
-    if args.jsonl:
-        if args.project or args.session or args.all:
-            ap.error('--jsonl renders that transcript as part of the project it was recorded in: '
-                'it cannot be combined with --project, --session or --all')
-        project = transcript_project(args.jsonl)
-        if project is None:
-            sys.exit(f'{args.jsonl} does not say which project it is from (it has no messages)')
-        files = [args.jsonl]
-    else:
-        project = (args.project or Path.cwd()).resolve()
-    slug = project_slug(project)
-    if not args.jsonl:
-        pdir = PROJECTS / slug
-        if not pdir.exists():
-            sys.exit(f'no transcripts for {project} (expected {pdir})')
-        files = find_sessions(pdir)
-        if args.session:
-            files = [f for f in files if f.stem.startswith(args.session)]
-        if not args.all:
-            files = files[:1]
-        if not files:
-            sys.exit('no matching session')
-    outs = [args.out if (args.out and len(files) == 1) else OUT_ROOT / slug / f'{f.stem}.html' for f in files]
-    base = server = None
-    asked = []   # set once Ctrl+C in a --watch run asked what to do with the server, and the run is ending
+    if args.depth is not None and (not args.recursive or args.depth < 0):
+        ap.error('-d/--depth goes with -r/--recursive, and is 0 (no limit) or more')
+    if args.jsonl and (args.project or args.session or args.all or args.recursive):
+        ap.error('-j/--jsonl renders that transcript as part of the project it was recorded in: '
+            'it cannot be combined with -p, -s, -a or -r')
+    sessions = Sessions(args)
+    picked = sessions.pick()
+    if not picked:
+        sys.exit('no matching session')
+
+    def scope_of(picked):   # what the server shows for these: their projects, or with -s / -j only them
+        out = []
+        for f, project, slug in picked:
+            x = dict(project=str(project), slug=slug, session=f.stem if (args.session or args.jsonl) else None)
+            if x not in out:
+                out.append(x)
+        return out
+    base, asked = None, []   # asked: set once Ctrl+C in a --watch run asked what to do with the server, and the run is ending
     if args.serve:
-        # what the server shows: this project's sessions, or only the ones asked for
-        scope = [dict(project=str(project), slug=slug, session=f.stem if (args.session or args.jsonl) else None)
-            for f in (files if (args.session or args.jsonl) else files[:1])]
-        status = ensure_server(args.port, scope)
+        scope = scope_of(picked)
+        status = ensure_server(args.port, scope, sessions.extra)
         atexit.register(at_exit_with_server, args.port, started=status == 'started', watch=bool(args.watch), asked=asked)
         base = server_base(args.port)
-        server = server_description(args.port)
         if args.verbose:
             print(f'server {"started" if status == "started" else "already running"}: {base}/', flush=True)
-    first_pass = True
+    first_pass, seen = True, set()
     while True:
         try:
-            for f, out in zip(files, outs):
+            if not first_pass:
+                picked = sessions.pick()
+                if args.serve and (new := [x for x in scope_of(picked) if x not in scope]):
+                    scope += new
+                    with contextlib.suppress(OSError):   # (the server may be gone)
+                        post_json(args.port, '/_scope', new)
+            outs = []
+            for f, project, slug in picked:
+                out = OUT_ROOT / slug / f'{f.stem}.html'
+                outs.append(out)
                 turns, name = build_turns(f)
                 prompts = [t for t in turns if t['kind'] == 'prompt']
                 if not name:   # untitled: fall back to the start of the first prompt
                     first = prompts[0]['prompt'].split('\n')[0] if prompts else ''
                     name = (first[:60] + '...') if len(first) > 60 else first or '(empty session)'
                 out.parent.mkdir(parents=True, exist_ok=True)
-                index_href = urllib.parse.quote(Path(os.path.relpath(OUT_ROOT / 'index.html', out.parent.resolve())).as_posix())
                 write_atomic(out.with_suffix('.search.js'), search_js(turns, f.stem))
-                write_page(out, render(turns, name, f, project, header_html(server, index_href),
-                    index_href.removesuffix('index.html'), out.with_suffix('.marks.js').name))
+                write_page(out, render(turns, name, f, project, header_html('../index.html'), '../', out.with_suffix('.marks.js').name))
                 sync_marks(out, f.stem, name, turn_rows(turns))
                 if args.verbose:
                     print(f'{url_for(out, base) if base else out}  "{name}"  ({plural(len(prompts), "prompt")})', flush=True)
-            index, n_sessions, n_projects = write_index(header_html(server))
+                elif not first_pass and out not in seen:   # e.g. a new session, picked by --watch
+                    print(f'new: {url_for(out, base)}  "{name}"', flush=True)
+                seen.add(out)
+            index, n_sessions, n_projects = write_index(header_html())
+            if first_pass:
+                for note in sessions.notes + ([] if args.serve else unserved_warnings(args.port, outs)):
+                    print(note, file=sys.stderr, flush=True)
             if args.verbose:
                 print(f'index of all rendered sessions: {url_for(index, base)}  ({plural(n_sessions, "session")} in {plural(n_projects, "project")})', flush=True)
-            elif first_pass:   # the URLs do not change between --watch passes
+            elif first_pass:
                 print(url_for(outs[0] if len(outs) == 1 else index, base), flush=True)
             first_pass = False
             if args.open:
