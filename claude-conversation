@@ -1,19 +1,18 @@
 #!/usr/bin/env python3
 """Renders a Claude Code session transcript as a simple prompt / answer page.
 
-Which sessions you get depends on where you run it. Run from Claude Code (e.g. with its `!` prefix), you
-get the session you are in, and the project is that session's. Otherwise the project is the current
-directory (where `claude` was started), or else the nearest directory above it that is one, and you get
-its most recently active session. -p/--project picks another project. -s/--session picks the most recent
-of its sessions whose id starts with the given text, and -a/--all all its sessions (or all those matching
--s). -r/--recursive also renders the projects in the directories below the project's (or below the
-current directory, even if it is not one), at most -d/--depth levels down (3 by default; 0: no limit):
-the latest session of each, unless -a or -s. -w/--watch picks again on every pass (unless you get the
-session you are in, or -s), so it follows new sessions. With -e/--serve, the server only shows the
-rendered sessions of those projects (including ones rendered by earlier runs), or with -s only the
-sessions rendered this time; a later -e run using the same server adds its own. Pages opened as files are
-not limited like that: their index (~/.claude/conversations/index.html) lists every session rendered so
-far, from any project.
+Which sessions you get depends on where you run it. The project is that of the Claude Code session it is
+run from (e.g. with its `!` prefix), else the current directory (where `claude` was started), or else the
+nearest directory above it that is one; -p/--project picks another. You get all its sessions; with
+-s/--session only the most recently active one (when run from Claude Code, the session you are in), or
+with -s ID the most recent one whose id starts with ID. -r/--recursive also renders the projects in the
+directories below the project's (or below the current directory, even if it is not one), at most
+-d/--depth levels down (3 by default; 0: no limit); with -s, the latest session of each. -w/--watch picks
+again on every pass, so it follows new sessions (unless -s was given an id, or picked the session you are
+in). With -e/--serve, the server only shows the rendered sessions of those projects (including ones
+rendered by earlier runs), or with -s only the sessions rendered this time; a later -e run using the same
+server adds its own. Pages opened as files are not limited like that: their index
+(~/.claude/conversations/index.html) lists every session rendered so far, from any project.
 
 Reads the session's JSONL under ~/.claude/projects/<project-slug>/ and writes an HTML page: a numbered
 list of your prompts (sidebar, with a search box; a button hides it and shows it again, remembered across
@@ -23,9 +22,10 @@ folded under each turn. Tool calls, tool results and thinking are left out. Stdl
 
 Usage (e.g. with Claude Code's `!` prefix, whose output is added to the conversation's context; with
 respondToBashCommands false in settings.json Claude does not reply to it):
-    claude-conversation                 # this session (else this directory's latest) -> HTML, prints its URL
-    claude-conversation -o              # ... and open it in the browser (--open)
-    claude-conversation -s <id-prefix> | -a | -r | -j <file>   # other sessions (see above)
+    claude-conversation                 # all sessions of this project -> HTML, prints the index's URL
+    claude-conversation -s              # only this session (else this directory's latest), printing its URL
+    claude-conversation -o              # ... and open the printed URL in the browser (--open)
+    claude-conversation -s <id-prefix> | -r | -j <file>   # other sessions (see above)
     claude-conversation -w -o           # regenerate every 30 s (-w SEC: every SEC s) until Ctrl+C (--watch)
     claude-conversation -e              # ... and print an http:// URL instead (--serve; see below)
     claude-conversation --stop-server
@@ -38,7 +38,7 @@ have one, linking to the same search there (from ~/.claude/conversations/session
 every run). Only one URL is printed: the page's, or the index's if several sessions were rendered (and,
 with -w, then the URL of each session that shows up later). With -v, one line per session is printed
 instead (HTML path, the session's name as `/resume` lists it, and its prompt count), then the index URL.
---open uses xdg-open on each generated page, so it does nothing useful over SSH: open the printed URL
+--open uses xdg-open on the printed URL, so it does nothing useful over SSH: open the URL yourself
 instead. Each page starts with a title line, "claude conversations" (linking to the index from session
 pages), followed by when it was generated and, when served, the address it was reached at, the host name
 and the server's pid.
@@ -842,7 +842,7 @@ def index_page(header: str, keep=None, note: str = '') -> tuple:
         parts.append(f'<h2>{html.escape(project)}</h2><table><tr><th>session</th><th class="n">prompts</th>'
             f'<th>first prompt</th><th>last prompt</th><th>id</th></tr>{rows}</table>')
     n = sum(len(v) for v in by_project.values())
-    note = html.escape(note or 'run claude-conversation (--all) in a project to add or refresh its sessions')
+    note = html.escape(note or 'run claude-conversation in a project to add or refresh its sessions')
     page = (f'<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">{stamp_meta()}<title>Claude Code sessions</title>'
         f'<style>{INDEX_CSS}</style></head><body>{header}<div class="meta">{plural(n, "rendered session")} in '
         f'{plural(len(by_project), "project")} · {note}</div>'
@@ -1348,7 +1348,7 @@ def projects_below(base: Path, depth: int) -> tuple:
 
 class Sessions:
     """The sessions a run renders (see the help), picked again by each --watch pass where that can change
-    (not for the Claude Code session the run is part of, -s or -j). pick() returns them as [(transcript,
+    (not for the Claude Code session the run is part of, -s with an id, or -j). pick() returns them as [(transcript,
     project directory, its folder name under PROJECTS, which is also its folder under OUT_ROOT)]. notes
     has what the first pick() found worth saying, and extra the arguments for restart_command().
     """
@@ -1368,7 +1368,7 @@ class Sessions:
             self.base = args.project.resolve()
         elif project:
             self.base, self.extra = project, ['-p', str(project)]   # (restarting from a terminal)
-            if not (args.session or args.all or args.recursive):
+            if args.session == '' and not args.recursive:   # -s alone: this session
                 self.fixed = [(here, project, here.parent.name)]
                 return
         else:
@@ -1401,19 +1401,17 @@ class Sessions:
         picked = []
         for project, folder in projects:
             files = find_sessions(folder)
-            if args.session:
-                files = [f for f in files if f.stem.startswith(args.session)]
-            elif not args.all:
+            if args.session == '':   # -s alone: the latest
                 files = files[:1]
+            elif args.session:
+                files = [f for f in files if f.stem.startswith(args.session)]
             picked += [(f, project, folder.name) for f in files]
-        if args.session:
-            if not args.all:
-                picked.sort(key=lambda x: x[0].stat().st_mtime, reverse=True)
-                if len(picked) > 1:
-                    self.notes.append(f'note: {len(picked)} sessions start with "{args.session}"; rendering the most '
-                        f'recently active one, {picked[0][0].stem} (-a for all of them)')
-                picked = picked[:1]
-            self.fixed = picked
+        if args.session:   # an id (or its start): the most recent match
+            picked.sort(key=lambda x: x[0].stat().st_mtime, reverse=True)
+            if len(picked) > 1:
+                self.notes.append(f'note: {len(picked)} sessions start with "{args.session}"; rendering the most '
+                    f'recently active one, {picked[0][0].stem}')
+            self.fixed = picked = picked[:1]
         self.first = False
         return picked
 
@@ -1451,18 +1449,21 @@ def arg_parser() -> argparse.ArgumentParser:
         formatter_class=ParagraphsHelpFormatter)
     ap.add_argument('-p', '--project', type=Path, help='project directory (default: that of the Claude Code session '
         'this is run from, else the current directory, or the nearest one above it that is a project)')
-    ap.add_argument('-s', '--session', help='session id, or its start, in that project (the most recent match, or all with -a)')
-    ap.add_argument('-a', '--all', action='store_true', help='render every session of the project (matching -s, if given)')
+    ap.add_argument('-s', '--session', nargs='?', const='', metavar='ID', help='render only the most recently '
+        'active session (of each project, with -r; when run from Claude Code, the session you are in), or with ID the '
+        'most recent one whose id starts with ID (default: all the sessions). As it takes an optional value, give it '
+        'on its own or last when combining short options (-e -s or -es, not -se)')
     ap.add_argument('-r', '--recursive', action='store_true', help='render the projects in the directory and in those '
-        'below it (see -d): the latest session of each (all with -a, or those matching -s)')
+        'below it (see -d): all their sessions, or with -s the latest of each (or the most recent match of -s ID)')
     ap.add_argument('-d', '--depth', type=int, metavar='N', help=f'with -r, look at most N directories down '
         f'(default: {RECURSE_DEPTH}; 0: no limit)')
     ap.add_argument('-j', '--jsonl', type=Path, help='a transcript file (one session) to render instead, as part of the '
-        'project it was recorded in, wherever this is run (so not with -p, -s, -a or -r); with -e, the server shows only it')
-    ap.add_argument('-o', '--open', action='store_true', help='open the page in the browser (xdg-open)')
+        'project it was recorded in, wherever this is run (so not with -p, -s or -r); with -e, the server shows only it')
+    ap.add_argument('-o', '--open', action='store_true', help='open the printed URL in the browser (xdg-open)')
     ap.add_argument('-w', '--watch', type=int, nargs='?', const=WATCH_INTERVAL, default=0, metavar='SEC',
         help=f'regenerate every SEC seconds (default: {WATCH_INTERVAL}) until Ctrl+C, picking the sessions again each '
-        'time (see above); as it can take a number, put it last when combining short options (-aew, not -wae)')
+        'time (see above); as it takes an optional number, give it on its own or last when combining short options '
+        '(-ew, not -we)')
     ap.add_argument('-e', '--serve', action='store_true',
         help='start a background HTTP server (unless running) for the pages of these projects (or only of the '
         'sessions given with -s / -j), and print http:// URLs')
@@ -1484,9 +1485,9 @@ def main() -> None:
         return print(stop_server(args.port))
     if args.depth is not None and (not args.recursive or args.depth < 0):
         ap.error('-d/--depth goes with -r/--recursive, and is 0 (no limit) or more')
-    if args.jsonl and (args.project or args.session or args.all or args.recursive):
+    if args.jsonl and (args.project or args.session is not None or args.recursive):
         ap.error('-j/--jsonl renders that transcript as part of the project it was recorded in: '
-            'it cannot be combined with -p, -s, -a or -r')
+            'it cannot be combined with -p, -s or -r')
     sessions = Sessions(args)
     picked = sessions.pick()
     if not picked:
@@ -1495,7 +1496,7 @@ def main() -> None:
     def scope_of(picked):   # what the server shows for these: their projects, or with -s / -j only them
         out = []
         for f, project, slug in picked:
-            x = dict(project=str(project), slug=slug, session=f.stem if (args.session or args.jsonl) else None)
+            x = dict(project=str(project), slug=slug, session=f.stem if (args.session is not None or args.jsonl) else None)
             if x not in out:
                 out.append(x)
         return out
@@ -1540,11 +1541,11 @@ def main() -> None:
                 print(f'index of all rendered sessions: {url_for(index, base)}  ({plural(n_sessions, "session")} in {plural(n_projects, "project")})', flush=True)
             elif first_pass:
                 print(url_for(outs[0] if len(outs) == 1 else index, base), flush=True)
-            first_pass = False
-            if args.open:
-                for out in outs:
-                    subprocess.Popen(['xdg-open', url_for(out, base)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if args.open:   # (the URL printed without -v)
+                subprocess.Popen(['xdg-open', url_for(outs[0] if len(outs) == 1 else index, base)],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 args.open = False
+            first_pass = False
             if not args.watch:
                 break
             time.sleep(args.watch)
