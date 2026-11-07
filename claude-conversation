@@ -1268,6 +1268,16 @@ def plural(n: int, word: str) -> str:
     return f'{n} {word}{"" if n == 1 else "s"}'
 
 
+def transcript_project(path: Path) -> Path | None:
+    """The directory a transcript's session was started in (its first entry's cwd; None if it has none,
+    as in transcripts without any messages).
+    """
+    for o in load_entries(path):
+        if o.get('cwd'):
+            return Path(o['cwd'])
+    return None
+
+
 def find_sessions(project_dir: Path):
     return sorted(project_dir.glob('*.jsonl'), key=lambda p: p.stat().st_mtime, reverse=True)
 
@@ -1275,11 +1285,11 @@ def find_sessions(project_dir: Path):
 def main() -> None:
     ap = argparse.ArgumentParser(description='\n\n'.join(__doc__.split('\n\n')[:2]),
         formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('--project', type=Path, default=Path.cwd(), help='project directory (default: cwd)')
+    ap.add_argument('--project', type=Path, help='project directory (default: the current directory)')
     ap.add_argument('--session', help='session id, or its start, in that project (the most recent match, or all with --all)')
-    ap.add_argument('--jsonl', type=Path, help='transcript file to render, instead of the session(s) --session / --all '
-        'would pick (and with --serve the server shows only it); it is still filed under the project (--project or '
-        'the current directory)')
+    ap.add_argument('--jsonl', type=Path, help='a transcript file (one session) to render instead, as part of the '
+        'project it was recorded in, wherever this is run (so not with --project, --session or --all); with --serve, '
+        'the server shows only it')
     ap.add_argument('--all', action='store_true', help='render every session of the project (matching --session, if given)')
     ap.add_argument('--out', type=Path, help='output HTML path (single session)')
     ap.add_argument('--open', action='store_true', help='open the page in the browser (xdg-open)')
@@ -1299,13 +1309,21 @@ def main() -> None:
         return run_server(args._server)
     if args.stop_server:
         return print(stop_server(args.port))
-    slug = project_slug(args.project.resolve())
-    pdir = PROJECTS / slug
     if args.jsonl:
+        if args.project or args.session or args.all:
+            ap.error('--jsonl renders that transcript as part of the project it was recorded in: '
+                'it cannot be combined with --project, --session or --all')
+        project = transcript_project(args.jsonl)
+        if project is None:
+            sys.exit(f'{args.jsonl} does not say which project it is from (it has no messages)')
         files = [args.jsonl]
     else:
+        project = (args.project or Path.cwd()).resolve()
+    slug = project_slug(project)
+    if not args.jsonl:
+        pdir = PROJECTS / slug
         if not pdir.exists():
-            sys.exit(f'no transcripts for {args.project} (expected {pdir})')
+            sys.exit(f'no transcripts for {project} (expected {pdir})')
         files = find_sessions(pdir)
         if args.session:
             files = [f for f in files if f.stem.startswith(args.session)]
@@ -1318,7 +1336,7 @@ def main() -> None:
     asked = []   # set once Ctrl+C in a --watch run asked what to do with the server, and the run is ending
     if args.serve:
         # what the server shows: this project's sessions, or only the ones asked for
-        scope = [dict(project=str(args.project.resolve()), slug=slug, session=f.stem if (args.session or args.jsonl) else None)
+        scope = [dict(project=str(project), slug=slug, session=f.stem if (args.session or args.jsonl) else None)
             for f in (files if (args.session or args.jsonl) else files[:1])]
         status = ensure_server(args.port, scope)
         atexit.register(at_exit_with_server, args.port, started=status == 'started', watch=bool(args.watch), asked=asked)
@@ -1338,7 +1356,7 @@ def main() -> None:
                 out.parent.mkdir(parents=True, exist_ok=True)
                 index_href = urllib.parse.quote(Path(os.path.relpath(OUT_ROOT / 'index.html', out.parent.resolve())).as_posix())
                 write_atomic(out.with_suffix('.search.js'), search_js(turns, f.stem))
-                write_page(out, render(turns, name, f, args.project.resolve(), header_html(server, index_href),
+                write_page(out, render(turns, name, f, project, header_html(server, index_href),
                     index_href.removesuffix('index.html'), out.with_suffix('.marks.js').name))
                 sync_marks(out, f.stem, name, turn_rows(turns))
                 if args.verbose:
