@@ -73,8 +73,15 @@ sessions rendered this time. Runs sharing a server
 only warns when a server is running that does not show its pages. The server has no access control:
 anyone who can reach its LAN address can read what it shows. When it cannot be reached, pages viewed
 through it say so below their title line, with the command (and directory) of the run that started it, to
-restart it (with that run's sessions only). The server runs until --stop-server, or until it has gone 30
-min with no page open and no `claude-conversation -w` running. A running server from an older version of
+restart it (with that run's sessions only). While it runs, the server also does what -w does for the runs
+using it: every 5 s it renders again the sessions they asked for whose transcripts changed, picking them
+again as they would (so it follows new sessions, and adds them to those it shows), and every 30 s it
+archives the transcripts. So -w is only needed with -n (pages opened as files), or to have new sessions'
+URLs printed; titles of pages it renders show when it last rendered them. The server restarts itself when
+this script changes (once the change is complete and compiles). Runs' choices only add up: a run never
+narrows what the server shows (e.g. -s after a run for the whole project; it says so), so to start afresh,
+use --stop-server first. The server runs until --stop-server, or until it has gone 30 min with no page open
+and no `claude-conversation -w` running. A running server from an older version of
 this script is replaced. Ctrl+C in a -w run (without -n) in a terminal asks what to do: stop the server
 and exit (the default, also on another Ctrl+C), "n" to carry on watching (the question is then cleared),
 or "b" to exit and leave the server running in the background. When another -w run uses the same server,
@@ -107,6 +114,7 @@ import socket
 import subprocess
 import sys
 import tarfile
+import traceback
 import textwrap
 import threading
 import time
@@ -137,11 +145,12 @@ CLEANUP_WARN = 7          # warn about transcripts Claude Code deletes within th
 SERVER_PORT = 10041
 WATCH_INTERVAL = 30       # seconds between --watch passes, unless given
 RECURSE_DEPTH = 3         # how many directories -r looks down, unless given
+FOLLOW_INTERVAL = 5       # seconds between the server's checks for changed transcripts
 IDLE_TIMEOUT = 30 * 60   # the server stops itself after this long with no page open and no --watch run
 TAB_TIMEOUT = 3 * 60     # a tab counts as open while it has asked within this long (hidden tabs ask less often)
 VERSION_TAG = 'claude-conversation-version'
 GENERATED_TAG = 'claude-conversation-generated'
-SERVER_API = 5           # bumped when what pages ask the server changes: a running older server is replaced
+SERVER_API = 6           # bumped when what pages ask the server changes: a running older server is replaced
 # private IPv4 ranges the server listens on, besides localhost (the last: shared address space, e.g. Tailscale)
 LAN_NETWORKS = [ipaddress.ip_network(n) for n in ('10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', '100.64.0.0/10')]
 # the starred and the hidden turns, with their prompts and answers, and the field of when each was marked
@@ -999,7 +1008,7 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
             return self.send_json(answer)
         if path == '/_status':
             return self.send_json({'tabs': open_tabs(srv), 'watch': watch_running(), 'api': SERVER_API, 'scope': srv.scope,
-                'hosts': srv.hosts})
+                'hosts': srv.hosts, 'follow': srv.follow})
         if path in ('/', '/index.html'):
             return self.send_body(self.fill_title(scoped_index(srv)['page']), 'text/html; charset=utf-8', head)
         if path == '/sessions.js':
@@ -1037,12 +1046,9 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
             marks = set_mark(body['kind'], Path(self.translate_path(page)), str(body.get('key', '')),
                 str(body.get('turn', '')), bool(body.get('on')))
             return self.send_error(404) if marks is None else self.send_json(marks)
-        if path == '/_scope' and isinstance(body, list):
+        if path == '/_scope' and isinstance(body, dict):   # {"scope": [...], "follow": a Sessions.choice()}
             with srv.lock:
-                for x in body:
-                    x = {k: x.get(k) for k in ('project', 'slug', 'session')}
-                    if x not in srv.scope:
-                        srv.scope.append(x)
+                srv.add(body.get('scope') or [], body.get('follow'))
             return self.send_json({'scope': srv.scope})
         self.send_error(404)
 
@@ -1147,9 +1153,77 @@ class ServerState:
     def __init__(self, port: int):
         self.port, self.hosts = port, []
         self.tabs, self.lock, self.last_request, self.index_cache = {}, threading.Lock(), time.monotonic(), None
-        # both set by ensure_server()
+        # set by ensure_server() (or kept by restart_server())
         self.restart = os.environ.get('CLAUDE_CONVERSATION_RESTART', '')
         self.scope = json.loads(os.environ.get('CLAUDE_CONVERSATION_SCOPE') or '[]')
+        self.follow = json.loads(os.environ.get('CLAUDE_CONVERSATION_FOLLOW') or '[]')   # runs' Sessions.choice()s
+        self.rendered = {}   # for render_session()
+
+    def add(self, scope: list, choice: dict | None) -> None:
+        """Adds a run's scope entries (in_scope()) and choice (Sessions.choice()), with the lock held."""
+        for x in scope:
+            if (x := {k: x.get(k) for k in ('project', 'slug', 'session')}) not in self.scope:
+                self.scope.append(x)
+        if choice and choice not in self.follow:
+            self.follow.append(choice)
+
+
+def script_signature() -> tuple:
+    st = Path(__file__).resolve().stat()
+    return st.st_size, st.st_mtime_ns
+
+
+def restart_server(srv) -> None:
+    """Runs this script's (new) code in the server's process, keeping its pid, what it shows and follows."""
+    lan = next((h for h in srv.hosts if h != '127.0.0.1'), '')
+    with srv.lock:
+        env = dict(os.environ, CLAUDE_CONVERSATION_SCOPE=json.dumps(srv.scope), CLAUDE_CONVERSATION_FOLLOW=json.dumps(srv.follow),
+            CLAUDE_CONVERSATION_RESTART=srv.restart, CLAUDE_CONVERSATION_LAN=lan)
+    print(f'{dt.datetime.now():%Y-%m-%d %H:%M:%S} this script changed: restarting', flush=True)
+    script = str(Path(__file__).resolve())
+    os.execve(sys.executable, [sys.executable, script, '--_server', str(srv.port)], env)
+
+
+def follow(srv) -> None:
+    """The server's --watch (a thread): every FOLLOW_INTERVAL s, renders again the sessions that the runs
+    using it chose (srv.follow) whose transcripts changed, picking them as those runs would, and adds them
+    to what it shows; every WATCH_INTERVAL s, archives the transcripts; restarts the server (restart_server())
+    once this script has changed, stayed the same for FOLLOW_INTERVAL s and compiles.
+    """
+    script, last_archive = script_signature(), time.monotonic()
+    while True:
+        time.sleep(FOLLOW_INTERVAL)
+        try:
+            if (now := script_signature()) != script:
+                time.sleep(FOLLOW_INTERVAL)   # (until a change being written is complete)
+                if script_signature() == now:
+                    try:
+                        compile(Path(__file__).resolve().read_text(), __file__, 'exec')
+                        restart_server(srv)
+                    except SyntaxError as e:
+                        print(f'this script changed, but does not compile ({e}): not restarting', flush=True)
+                        script = now
+            if time.monotonic() - last_archive >= WATCH_INTERVAL:
+                archive_all()
+                last_archive = time.monotonic()
+            with srv.lock:
+                choices = list(srv.follow)
+            changed = False
+            for choice in choices:
+                picked = Sessions.from_choice(choice).pick()
+                with srv.lock:
+                    srv.add(scope_of(picked, choice['by_session']), None)
+                for f, project, slug in picked:
+                    out = OUT_ROOT / slug / f'{session_id(f)}.html'
+                    if out not in srv.rendered and up_to_date(out, f):   # (as a run left it)
+                        srv.rendered[out] = ((f.stat().st_size, f.stat().st_mtime_ns), None)
+                        continue
+                    changed |= render_session(f, project, slug, srv.rendered, restamp=False)[1] is not None
+            if changed:
+                write_index(header_html())
+        except Exception:   # (one bad transcript must not stop the server)
+            traceback.print_exc()
+            sys.stdout.flush()
 
 
 def run_server(port: int) -> None:
@@ -1169,6 +1243,7 @@ def run_server(port: int) -> None:
         servers[-1].state = state
         state.hosts.append(host)
     threading.Thread(target=stop_when_idle, args=(state, servers), daemon=True).start()
+    threading.Thread(target=follow, args=(state,), daemon=True).start()
     for server in servers[1:]:
         threading.Thread(target=server.serve_forever, daemon=True).start()
     servers[0].serve_forever()
@@ -1284,19 +1359,20 @@ def restart_command(extra: list) -> str:
     return f'cd {shlex.quote(os.getcwd())} && {shlex.join([prog, *sys.argv[1:], *extra])}'
 
 
-def ensure_server(port: int, scope: list, extra: list) -> str | None:
+def ensure_server(port: int, scope: list, choice: dict, extra: list) -> str | None:
     """Starts the background server on port, listening on localhost and lan_address(), to show the sessions
-    in scope (see in_scope()), unless it is running, in which case it adds them to those it shows. A
-    running server that does not listen on that address, or is from an older version of this script (one
-    without what pages now ask of it), is replaced, keeping what it showed. extra: for restart_command().
-    Returns 'started' or 'running', or None (saying why) if it cannot serve.
+    in scope (see in_scope()) and follow choice (Sessions.choice()), unless it is running, in which case it
+    adds them to those it shows and follows. A running server that does not listen on that address, or is
+    from an older version of this script (one without what pages now ask of it), is replaced, keeping what
+    it showed and followed. extra: for restart_command(). Returns 'started' or 'running', or None (saying
+    why) if it cannot serve.
     """
     lan, status = lan_address(), server_status(port)
     if status == 'ours':
         state = server_state(port) or {}
         if state.get('api') == SERVER_API and (lan is None or lan in state.get('hosts', [])):
             try:
-                post_json(port, '/_scope', scope)
+                post_json(port, '/_scope', {'scope': scope, 'follow': choice})
                 return 'running'
             except OSError as e:
                 return print(f'warning: could not add the sessions of this run to those the server on port {port} '
@@ -1309,7 +1385,10 @@ def ensure_server(port: int, scope: list, extra: list) -> str | None:
                 'so not serving', file=sys.stderr)
         print(f'the server on port {port} {why}: {stopped}, starting it again', file=sys.stderr)
         scope = [x for x in state.get('scope') or [] if x not in scope] + scope   # (keeping what it showed)
+        follow = [c for c in state.get('follow') or [] if c != choice]
         status = 'none'
+    else:
+        follow = []
     if status == 'other':
         return print(f'warning: port {port} is in use by another program, so not serving (pick another port with '
             '--port)', file=sys.stderr)
@@ -1321,7 +1400,7 @@ def ensure_server(port: int, scope: list, extra: list) -> str | None:
         proc = subprocess.Popen([sys.executable, os.path.abspath(__file__), '--_server', str(port)],
             stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True,
             env=dict(os.environ, CLAUDE_CONVERSATION_RESTART=restart_command(extra), CLAUDE_CONVERSATION_SCOPE=json.dumps(scope),
-                CLAUDE_CONVERSATION_LAN=lan or ''))
+                CLAUDE_CONVERSATION_FOLLOW=json.dumps([*follow, choice]), CLAUDE_CONVERSATION_LAN=lan or ''))
     for _ in range(50):
         if server_status(port) == 'ours':
             pidfile.write_text(f'{proc.pid}\n')
@@ -1687,6 +1766,23 @@ class Sessions:
             f'the nearest directory above it with some{hint}')
         self.base = up
 
+    def choice(self) -> dict:
+        """What the server needs to pick these sessions again as this would (from_choice()), and whether it
+        shows them by session (with -s / -j) rather than by project.
+        """
+        args = self.args
+        return dict(base=str(getattr(self, 'base', '')), session=args.session, recursive=args.recursive, depth=args.depth,
+            fixed=None if self.fixed is None else [[str(f), str(project), slug] for f, project, slug in self.fixed],
+            by_session=args.session is not None or bool(getattr(args, 'jsonl', None)))
+
+    @classmethod
+    def from_choice(cls, choice: dict):
+        self = cls.__new__(cls)
+        self.args = argparse.Namespace(session=choice['session'], recursive=choice['recursive'], depth=choice['depth'])
+        self.base, self.notes, self.extra, self.first = Path(choice['base']), [], [], False
+        self.fixed = None if choice['fixed'] is None else [(Path(f), Path(project), slug) for f, project, slug in choice['fixed']]
+        return self
+
     def pick(self) -> list:
         if self.fixed is not None:
             return self.fixed
@@ -1715,6 +1811,50 @@ class Sessions:
             self.fixed = picked = picked[:1]
         self.first = False
         return picked
+
+
+def scope_of(picked: list, by_session: bool) -> list:
+    """What the server shows for the sessions picked: their projects, or by_session (-s / -j) only them."""
+    out = []
+    for f, project, slug in picked:
+        x = dict(project=str(project), slug=slug, session=session_id(f) if by_session else None)
+        if x not in out:
+            out.append(x)
+    return out
+
+
+def up_to_date(page: Path, transcript: Path) -> bool:
+    """Whether page was rendered (by its generation time) after transcript was last written."""
+    try:
+        made = dt.datetime.strptime(page_stamp(page)[1] or '', '%Y-%m-%d %H:%M:%S').timestamp()
+        return made >= transcript.stat().st_mtime
+    except (OSError, ValueError):
+        return False
+
+
+def render_session(f: Path, project: Path, slug: str, rendered: dict, restamp: bool = True) -> tuple:
+    """Renders the transcript f (of the project directory project, folder slug) to OUT_ROOT/slug/<session
+    id>.html, with its search and marks files, unless it is the same as when rendered[page] was rendered:
+    then only its generation time is updated (if restamp). rendered: {page: ((transcript size, time), page
+    text, or None)}. Returns (page, its session's name and number of prompts, or None if unchanged).
+    """
+    out, st = OUT_ROOT / slug / f'{session_id(f)}.html', f.stat()
+    if out in rendered and rendered[out][0] == (st.st_size, st.st_mtime_ns) and out.exists():
+        if restamp and rendered[out][1]:
+            write_page(out, rendered[out][1])
+        return out, None
+    turns, name = build_turns(f)
+    prompts = [t for t in turns if t['kind'] == 'prompt']
+    if not name:   # untitled: fall back to the start of the first prompt
+        first = prompts[0]['prompt'].split('\n')[0] if prompts else ''
+        name = (first[:60] + '...') if len(first) > 60 else first or '(empty session)'
+    out.parent.mkdir(parents=True, exist_ok=True)
+    write_atomic(out.with_suffix('.search.js'), search_js(turns, session_id(f)))
+    page = render(turns, name, f, project, header_html('../index.html'), '../', out.with_suffix('.marks.js').name)
+    write_page(out, page)
+    rendered[out] = ((st.st_size, st.st_mtime_ns), page)
+    sync_marks(out, session_id(f), name, turn_rows(turns))
+    return out, (name, len(prompts))
 
 
 def unserved_warnings(port: int, pages: list) -> list:
@@ -1761,9 +1901,10 @@ def arg_parser() -> argparse.ArgumentParser:
     ap.add_argument('-o', '--open', action='store_true', help='open the printed URL in the browser (xdg-open)')
     ap.add_argument('-w', '--watch', type=int, nargs='?', const=WATCH_INTERVAL, default=0, metavar='SEC',
         help=f'regenerate every SEC seconds (default: {WATCH_INTERVAL}) until Ctrl+C, picking the sessions again each '
-        'time, so it follows new sessions (unless -s was given an ID, or picked the session this is run from); only '
-        'changed transcripts are rendered again. As it takes an optional number, give it on its own or last when '
-        'combining short options (-rw, not -wr)')
+        'time, so it follows new sessions (unless -s was given an ID, or picked the session this is run from), and '
+        'printing their URLs; only changed transcripts are rendered again. The server does the same by itself, so '
+        'this is mostly for -n. As it takes an optional number, give it on its own or last when combining short '
+        'options (-rw, not -wr)')
     ap.add_argument('-n', '--no-serve', action='store_true', help='only write the pages, and print file:// URLs: '
         'no background server (which is otherwise started, unless running, for the pages of these projects, or only '
         'of the sessions given with -s / -j; see above). Also for hooks and scripts that only need the files')
@@ -1796,21 +1937,18 @@ def main() -> None:
     picked = sessions.pick()
     if not picked:
         sys.exit('no matching session')
-
-    def scope_of(picked):   # what the server shows for these: their projects, or with -s / -j only them
-        out = []
-        for f, project, slug in picked:
-            x = dict(project=str(project), slug=slug, session=session_id(f) if (args.session is not None or args.jsonl) else None)
-            if x not in out:
-                out.append(x)
-        return out
+    choice = sessions.choice()   # (after the first pick: for -s ID, its session)
     base, asked = None, []   # asked: set once Ctrl+C in a --watch run asked what to do with the server, and the run is ending
     serve = not args.no_serve
-    if serve and (status := ensure_server(args.port, scope_of(picked), sessions.extra)):
+    if serve and (status := ensure_server(args.port, scope_of(picked, choice['by_session']), choice, sessions.extra)):
         atexit.register(at_exit_with_server, args.port, started=status == 'started', watch=bool(args.watch), asked=asked)
         base = server_base(args.port)
         if args.verbose:
             print(f'server {"started" if status == "started" else "already running"}: {base}/', flush=True)
+        if choice['by_session'] and any(x['session'] is None and x['slug'] in {slug for _, _, slug in picked}
+                for x in (server_state(args.port) or {}).get('scope', [])):
+            print('note: the server also shows (and follows) the other sessions of this project, as an earlier run asked; '
+                'to show only these, use --stop-server first', file=sys.stderr)
         if base.startswith('http://localhost:') and ssh_address():
             print(f'note: this machine has no LAN address, so the server only listens on localhost: to reach it from '
                 f'the machine you are connected from, forward the port (ssh -L {args.port}:localhost:{args.port} ...)',
@@ -1825,28 +1963,16 @@ def main() -> None:
                 picked = sessions.pick()
                 if serve:   # (again each time: the server may have been restarted by another run since)
                     with contextlib.suppress(OSError):   # (or be gone)
-                        post_json(args.port, '/_scope', scope_of(picked))
+                        post_json(args.port, '/_scope', {'scope': scope_of(picked, choice['by_session']), 'follow': choice})
             outs = []
             for f, project, slug in picked:
-                out = OUT_ROOT / slug / f'{session_id(f)}.html'
+                out, made = render_session(f, project, slug, rendered)   # (unchanged: only its generation time)
                 outs.append(out)
-                st = f.stat()
-                if out in rendered and rendered[out][0] == (st.st_size, st.st_mtime_ns) and out.exists():
-                    write_page(out, rendered[out][1])   # unchanged: only its generation time (in the title line)
+                if made is None:
                     continue
-                turns, name = build_turns(f)
-                prompts = [t for t in turns if t['kind'] == 'prompt']
-                if not name:   # untitled: fall back to the start of the first prompt
-                    first = prompts[0]['prompt'].split('\n')[0] if prompts else ''
-                    name = (first[:60] + '...') if len(first) > 60 else first or '(empty session)'
-                out.parent.mkdir(parents=True, exist_ok=True)
-                write_atomic(out.with_suffix('.search.js'), search_js(turns, session_id(f)))
-                page = render(turns, name, f, project, header_html('../index.html'), '../', out.with_suffix('.marks.js').name)
-                write_page(out, page)
-                rendered[out] = ((st.st_size, st.st_mtime_ns), page)
-                sync_marks(out, session_id(f), name, turn_rows(turns))
+                name, n_prompts = made
                 if args.verbose:
-                    print(f'{url_for(out, base) if base else out}  "{name}"  ({plural(len(prompts), "prompt")})', flush=True)
+                    print(f'{url_for(out, base) if base else out}  "{name}"  ({plural(n_prompts, "prompt")})', flush=True)
                 elif not first_pass and out not in seen:   # e.g. a new session, picked by --watch
                     print(f'new: {url_for(out, base)}  "{name}"', flush=True)
                 seen.add(out)
