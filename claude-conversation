@@ -1,24 +1,17 @@
 #!/usr/bin/env python3
-"""Renders a Claude Code session transcript as a simple prompt / answer page.
+"""Renders the Claude Code sessions of a project as prompt / answer web pages, and serves them.
 
-Which sessions you get depends on where you run it. The project is that of the Claude Code session it is
-run from (e.g. with its `!` prefix), else the current directory (where `claude` was started), or else the
-nearest directory above it that is one; -p/--project picks another. You get all its sessions; with
--s/--session only the most recently active one (when run from Claude Code, the session you are in), or
-with -s ID the most recent one whose id starts with ID. -r/--recursive also renders the projects in the
-directories below the project's (or below the current directory, even if it is not one), at most
--d/--depth levels down (3 by default; 0: no limit); with -s, the latest session of each. -w/--watch picks
-again on every pass, so it follows new sessions (unless -s was given an id, or picked the session you are
-in). The server (see below) only shows the rendered sessions of those projects (including ones rendered
-by earlier runs), or with -s only the sessions rendered this time; a later run using the same server adds
-its own. Pages opened as files are not limited like that: their index
-(~/.claude/conversations/index.html) lists every session rendered so far, from any project.
+The project is that of the Claude Code session this is run from, else the current directory (or the
+nearest directory above it with sessions). The server (see -n) listens on localhost and this machine's LAN
+address, and only shows the sessions that runs asked for. Every run also archives all transcripts,
+compressed and readable only by you, in ~/.local/share/claude-conversation, so that they outlive Claude
+Code's cleanup of them; pages are rendered from there once Claude Code has deleted a transcript.
 
-Reads the session's JSONL under ~/.claude/projects/<project-slug>/ and writes an HTML page: a numbered
-list of your prompts (sidebar, with a search box; a button hides it and shows it again, remembered across
-pages) and, for each, the assistant's final answer rendered from markdown with a "copy" button;
-intermediate assistant text (progress notes between tool calls, replies to background notifications) is
-folded under each turn. Tool calls, tool results and thinking are left out. Stdlib only.
+Each page has a numbered list of your prompts (sidebar, with a search box; a button hides it and shows it
+again, remembered across pages) and, for each, the assistant's final answer rendered from markdown with a
+"copy" button; intermediate assistant text (progress notes between tool calls, replies to background
+notifications) is folded under each turn. Tool calls, tool results and thinking are left out. Stdlib only
+(Python 3.14's compression.zstd for the archive, else gzip).
 
 Usage (e.g. with Claude Code's `!` prefix, whose output is added to the conversation's context; with
 respondToBashCommands false in settings.json Claude does not reply to it):
@@ -29,13 +22,14 @@ respondToBashCommands false in settings.json Claude does not reply to it):
     claude-conversation -w              # regenerate every 30 s (-w SEC: every SEC s) until Ctrl+C (--watch)
     claude-conversation -n              # only write the pages, and print a file:// URL (--no-serve)
     claude-conversation --stop-server
-Output: ~/.claude/conversations/<project-slug>/<session-id>.html, and next to it <session-id>.search.js
-(its prompts and answers, for searches), <session-id>.marks.js and <session-id>.version.js. Every run
-also rewrites ~/.claude/conversations/index.html, which links every session page under that directory
-(all projects, grouped by project); its search box searches all their prompts and answers, listing the
-matches under each session. When a session page's search has no match, it lists the other sessions that
-have one, linking to the same search there (from ~/.claude/conversations/sessions.js, also rewritten
-every run). Only one URL is printed: the page's, or the index's if several sessions were rendered (and,
+Output: ~/.cache/claude-conversation/<project-slug>/<session-id>.html, and next to it
+<session-id>.search.js (its prompts and answers, for searches), <session-id>.marks.js and
+<session-id>.version.js. Every run also rewrites ~/.cache/claude-conversation/index.html, which links every
+session page under that directory (all projects, grouped by project); its search box searches all their
+prompts and answers, listing the matches under each session. Pages opened as files are not limited to the
+sessions a server shows: their index lists every session rendered so far, from any project. When a session
+page's search has no match, it lists the other sessions that have one, linking to the same search there
+(from sessions.js next to the index, also rewritten every run). Only one URL is printed: the page's, or the index's if several sessions were rendered (and,
 with -w, then the URL of each session that shows up later). With -v, one line per session is printed
 instead (HTML path, the session's name as `/resume` lists it, and its prompt count), then the index URL.
 --open uses xdg-open on the printed URL, so it does nothing useful over SSH: open the URL yourself
@@ -49,11 +43,23 @@ The prompt list shows starred turns first, unless its "starred first" box is unt
 left out of the page, its prompt list and its searches, and of the index's search, unless "show hidden"
 is ticked (on either page; the turns are then dimmed); next to it is how many turns are hidden (on the
 index, in the sessions it lists). The server saves stars and hidden turns (pages opened as files
-show them but cannot change them), with their prompts and answers, to ~/.claude/conversations/.starred.json
-and .hidden.json, whose entries later runs keep up to date with the transcript (e.g. an answer that was
-still being written).
+show them but cannot change them), with their prompts and answers, to
+~/.local/share/claude-conversation/starred.json and hidden.json, whose entries later runs keep up to date
+with the transcript (e.g. an answer that was still being written).
 
-Each run (unless -n/--no-serve) also starts a background HTTP server for ~/.claude/conversations (port
+Claude Code deletes transcripts that have not been written to for "cleanupPeriodDays" (in
+~/.claude/settings.json; 30 if unset). So every run first copies each transcript under ~/.claude/projects
+that changed since its last copy, with its session's folder (subagent transcripts, tool outputs too large
+for the transcript), to ~/.local/share/claude-conversation/archive/<project-slug>/ (<session-id>.jsonl.zst
+and <session-id>.tar.zst, or .gz without zstd). Sessions whose transcripts Claude Code deleted are
+rendered from there; delete their files there to forget them. Each run also warns (once per session)
+about the transcripts Claude Code will delete within 7 days, and about an invalid cleanupPeriodDays (0 is
+invalid). Everything this script writes is readable only by you (folders 700, files 600): the pages and
+the archive hold everything the transcripts do, secrets included. Earlier versions kept the pages, stars
+and hidden turns in ~/.claude/conversations; the first run moves them. $CLAUDE_CONFIG_DIR, $XDG_DATA_HOME
+and $XDG_CACHE_HOME move these folders as usual.
+
+Each run (unless -n/--no-serve) also starts a background HTTP server for the pages (port
 10041 by default; --port), unless it is already running, and prints http:// URLs instead of file:// ones.
 The server listens on localhost and on this machine's LAN address, which the URLs use: the address an SSH
 connection the run is under reached it at (found through the processes it runs under, and in tmux through
@@ -61,7 +67,8 @@ the client attached to its session), else that of the machine's default route. O
 count (10.x, 172.16-31.x, 192.168.x, and 100.64-127.x as used by e.g. Tailscale): without one, e.g. on a
 machine with only a public address, the server only listens on localhost. A running server that does not
 listen on the address a run wants is restarted there, keeping what it shows. The server only serves the
-sessions of the run's projects, or with -s / -j only those sessions (see above). Runs sharing a server
+rendered sessions of the run's projects (including ones rendered by earlier runs), or with -s / -j only the
+sessions rendered this time. Runs sharing a server
 (the same port) add theirs to those it shows, and its index lists them all, until it stops. A run with -n
 only warns when a server is running that does not show its pages. The server has no access control:
 anyone who can reach its LAN address can read what it shows. When it cannot be reached, pages viewed
@@ -83,6 +90,7 @@ import datetime as dt
 import fcntl
 import functools
 import glob
+import gzip
 import hashlib
 import html
 import ipaddress
@@ -98,15 +106,34 @@ import signal
 import socket
 import subprocess
 import sys
+import tarfile
 import textwrap
 import threading
 import time
 import urllib.parse
 import urllib.request
 from pathlib import Path
+try:
+    from compression import zstd   # Python 3.14+
+except ImportError:
+    zstd = None
 
-PROJECTS = Path.home() / '.claude' / 'projects'
-OUT_ROOT = Path.home() / '.claude' / 'conversations'
+
+def xdg_dir(var: str, default: str) -> Path:
+    """This script's folder in the XDG base directory $var (if set to an absolute path), else in ~/default."""
+    base = os.environ.get(var, '')
+    return (Path(base) if os.path.isabs(base) else Path.home() / default) / 'claude-conversation'
+
+
+CLAUDE_DIR = Path(os.environ.get('CLAUDE_CONFIG_DIR') or Path.home() / '.claude')
+PROJECTS = CLAUDE_DIR / 'projects'
+DATA = xdg_dir('XDG_DATA_HOME', '.local/share')   # what cannot be rebuilt: the transcript archive, stars, hidden turns
+OUT_ROOT = xdg_dir('XDG_CACHE_HOME', '.cache')     # the pages (rebuilt from the transcripts), and the server's files
+ARCHIVE = DATA / 'archive'
+ARCHIVE_EXT = '.zst' if zstd else '.gz'
+LEGACY_OUT = CLAUDE_DIR / 'conversations'   # where earlier versions kept the pages, stars and hidden turns
+CLEANUP_DAYS = 30         # Claude Code's default cleanupPeriodDays
+CLEANUP_WARN = 7          # warn about transcripts Claude Code deletes within this many days
 SERVER_PORT = 10041
 WATCH_INTERVAL = 30       # seconds between --watch passes, unless given
 RECURSE_DEPTH = 3         # how many directories -r looks down, unless given
@@ -114,11 +141,11 @@ IDLE_TIMEOUT = 30 * 60   # the server stops itself after this long with no page 
 TAB_TIMEOUT = 3 * 60     # a tab counts as open while it has asked within this long (hidden tabs ask less often)
 VERSION_TAG = 'claude-conversation-version'
 GENERATED_TAG = 'claude-conversation-generated'
-SERVER_API = 4           # bumped when what pages ask the server changes: a running older server is replaced
+SERVER_API = 5           # bumped when what pages ask the server changes: a running older server is replaced
 # private IPv4 ranges the server listens on, besides localhost (the last: shared address space, e.g. Tailscale)
 LAN_NETWORKS = [ipaddress.ip_network(n) for n in ('10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', '100.64.0.0/10')]
 # the starred and the hidden turns, with their prompts and answers, and the field of when each was marked
-MARKS = {'star': OUT_ROOT / '.starred.json', 'hide': OUT_ROOT / '.hidden.json'}
+MARKS = {'star': DATA / 'starred.json', 'hide': DATA / 'hidden.json'}
 MARKED_FIELD = {'star': 'starred', 'hide': 'hidden'}
 # filled in by write_page(), after hashing the rest of the page for its version
 VERSION_SLOT, GENERATED_SLOT = '\0version\0', '\0generated\0'
@@ -127,16 +154,38 @@ TAGS_NOT_PROMPT = ('<task-notification', '<system-reminder', '<local-command', '
     '[Image:', 'Base directory for this skill', '<agent-message')
 
 
+def tilde(path: Path) -> str:
+    """path, with ~ for the home folder."""
+    return '~/' + str(path.relative_to(Path.home())) if path.is_relative_to(Path.home()) else str(path)
+
+
+def session_id(transcript: Path) -> str:
+    """The id of the session of a transcript (<id>.jsonl, or an archived <id>.jsonl.zst or .gz)."""
+    return transcript.name.split('.')[0]
+
+
 def project_slug(cwd: Path) -> str:
     return re.sub(r'[^A-Za-z0-9]', '-', str(cwd))
 
 
+def open_transcript(path: Path):
+    """path for reading as text, decompressing archived transcripts (.zst, .gz)."""
+    if path.name.endswith('.zst'):
+        if zstd is None:
+            sys.exit(f'{path} is compressed with zstd, which needs Python 3.14 or later')
+        return zstd.open(path, 'rt', errors='replace')
+    if path.name.endswith('.gz'):
+        return gzip.open(path, 'rt', errors='replace')
+    return path.open(errors='replace')
+
+
 def load_entries(path: Path):
-    for line in path.open(errors='replace'):
-        try:
-            yield json.loads(line)
-        except json.JSONDecodeError:
-            continue
+    with open_transcript(path) as f:
+        for line in f:
+            try:
+                yield json.loads(line)
+            except json.JSONDecodeError:
+                continue
 
 
 def text_of(content) -> str:
@@ -392,7 +441,7 @@ def page_stamp(path: Path) -> tuple:
 
 def write_atomic(path: Path, text: str) -> None:
     """Writes path through a temporary file, so open pages never load it half written."""
-    tmp = path.with_name(f'.{path.name}.tmp')
+    tmp = path.with_name(f'.{path.name}.{os.getpid()}.tmp')
     tmp.write_text(text)
     os.replace(tmp, path)
 
@@ -531,15 +580,15 @@ function cp(id,btn){const t=document.getElementById(id).dataset.raw;   // (butto
  try{document.getElementById('starfirst').checked=localStorage.ccStarFirst!=='0';}catch(e){}
  document.getElementById('showhid').checked=!ccHiding();
  const ro='stars and hidden turns can only be changed on pages served by claude-conversation (not -n)';
- document.querySelectorAll('button.star').forEach(b=>{b.title=SERVED?'star this prompt and answer (saved in ~/.claude/conversations/.starred.json)':ro;b.classList.toggle('ro',!SERVED);});
- document.querySelectorAll('button.hide').forEach(b=>{b.title=SERVED?'hide this prompt and answer (saved in ~/.claude/conversations/.hidden.json)':ro;b.classList.toggle('ro',!SERVED);});
+ document.querySelectorAll('button.star').forEach(b=>{b.title=SERVED?'star this prompt and answer (saved in STARRED_FILE)':ro;b.classList.toggle('ro',!SERVED);});
+ document.querySelectorAll('button.hide').forEach(b=>{b.title=SERVED?'hide this prompt and answer (saved in HIDDEN_FILE)':ro;b.classList.toggle('ro',!SERVED);});
  showMarks();(window.ccMarksQ||[]).forEach(ccMarks);   // the marks loaded in <head>
  // a query from a link (#q=...), else the one typed before the last reload
  let q='';
  if(location.hash.startsWith('#q=')){q=decodeURIComponent(location.hash.slice(3));history.replaceState(null,'',location.pathname+location.search);}
  else try{q=sessionStorage['ccQ'+location.pathname]||'';}catch(e){}
  if(q){document.getElementById('q').value=q;flt();}else navLabel();})();
-"""
+""".replace('STARRED_FILE', tilde(MARKS['star'])).replace('HIDDEN_FILE', tilde(MARKS['hide']))
 
 # In <head>, so nothing flashes up before the page's scripts run: whether the prompt list is hidden (by its
 # button) and whether hidden turns are shown (both remembered in localStorage, for all pages), and the hidden
@@ -619,7 +668,8 @@ def marks_lock():
     runs regenerating pages).
     """
     OUT_ROOT.mkdir(parents=True, exist_ok=True)
-    with (OUT_ROOT / '.marks.lock').open('w') as f:
+    DATA.mkdir(parents=True, exist_ok=True)
+    with (DATA / '.marks.lock').open('w') as f:
         fcntl.flock(f, fcntl.LOCK_EX)
         yield
 
@@ -720,9 +770,9 @@ def render(turns, name: str, source: Path, project: Path, header: str, root: str
     """
     prompts = [t for t in turns if t['kind'] == 'prompt']
     n = len(prompts)
-    title = f'{name} · Claude Code session {source.stem[:8]} ({project.name})'
+    title = f'{name} · Claude Code session {session_id(source)[:8]} ({project.name})'
     # metadata for the index page and later runs, kept near the top of the file so it is cheap to read back
-    info = dict(project=str(project), session=source.stem, name=name, prompts=n,
+    info = dict(project=str(project), session=session_id(source), name=name, prompts=n,
         first=prompts[0]['time'] if prompts else '', last=prompts[-1]['time'] if prompts else '')
     meta = f'<meta name="claude-conversation" content="{html.escape(json.dumps(info), quote=True)}">'
     nav, body = [], []
@@ -757,7 +807,7 @@ def render(turns, name: str, source: Path, project: Path, header: str, root: str
     return (f'<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">{stamp_meta()}{meta}<title>{html.escape(title)}</title>'
         f'<style>{CSS}</style>{HEAD_JS}<script src="{html.escape(urllib.parse.quote(marks))}"></script>'
         '<script>if(ccMarksQ.length)ccHideStyle((ccMarksQ[0].hide||{}).keys||[])</script>'
-        f'</head><body data-root="{html.escape(root)}" data-session="{html.escape(source.stem)}">'
+        f'</head><body data-root="{html.escape(root)}" data-session="{html.escape(session_id(source))}">'
         f'{header}<div class="cols"><nav><input id="q" placeholder="search prompts and answers" oninput="flt()">'
         '<div class="opts"><label><input type="checkbox" id="starfirst" checked onchange="sortNav()">starred first</label>'
         '<label><input type="checkbox" id="showhid" onchange="showHidden()">show hidden</label> <small id="nhid"></small></div>'
@@ -1210,8 +1260,17 @@ def server_status(port: int) -> str:
 
 def server_files(port: int):
     """(pid file, log file) of the server on port."""
-    return (Path.home() / '.claude' / f'conversation-server-{port}.pid',
-        Path.home() / '.claude' / f'conversation-server-{port}.log')
+    return OUT_ROOT / f'server-{port}.pid', OUT_ROOT / f'server-{port}.log'
+
+
+def pid_files() -> dict:
+    """{port: pid file} of the servers' pid files, including those of earlier versions (in CLAUDE_DIR)."""
+    found = {}
+    for folder, pattern in ((CLAUDE_DIR, r'conversation-server-(\d+)[.]pid'), (OUT_ROOT, r'server-(\d+)[.]pid')):
+        for f in folder.glob('*.pid'):
+            if m := re.fullmatch(pattern, f.name):
+                found[int(m.group(1))] = f
+    return found
 
 
 def restart_command(extra: list) -> str:
@@ -1275,7 +1334,7 @@ def ensure_server(port: int, scope: list, extra: list) -> str | None:
 
 def server_pid(port: int) -> int | None:
     """pid of the server on port, from its pid file (None if missing or not this script's server)."""
-    pidfile, _ = server_files(port)
+    pidfile = pid_files().get(port, server_files(port)[0])
     try:
         pid = int(pidfile.read_text())
         if b'--_server' in Path(f'/proc/{pid}/cmdline').read_bytes():
@@ -1294,7 +1353,7 @@ def stop_server(port: int) -> str:
     os.kill(pid, signal.SIGTERM)
     for _ in range(30):
         if server_status(port) != 'ours':
-            server_files(port)[0].unlink()
+            pid_files().get(port, server_files(port)[0]).unlink(missing_ok=True)
             return f'stopped server on port {port} (pid {pid})'
         time.sleep(0.1)
     return f'sent SIGTERM to the server on port {port} (pid {pid}), but it is still answering'
@@ -1423,18 +1482,158 @@ def transcript_project(path: Path) -> Path | None:
     return None
 
 
-def find_sessions(project_dir: Path):
-    return sorted(project_dir.glob('*.jsonl'), key=lambda p: p.stat().st_mtime, reverse=True)
+def find_sessions(slug: str) -> list:
+    """The transcripts of the project folder slug (under PROJECTS), most recently active first: those
+    there, and the archived copies (ARCHIVE) of those Claude Code has deleted.
+    """
+    found = {session_id(f): f for f in (ARCHIVE / slug).glob('*.jsonl.*') if f.name.endswith(('.gz', '.zst' if zstd else '.gz'))}
+    found.update((session_id(f), f) for f in (PROJECTS / slug).glob('*.jsonl'))
+    return sorted(found.values(), key=lambda f: f.stat().st_mtime, reverse=True)
+
+
+def project_folders() -> list:
+    """The names of the project folders under PROJECTS or ARCHIVE."""
+    return sorted({d.name for root in (PROJECTS, ARCHIVE) if root.is_dir() for d in root.iterdir() if d.is_dir()})
+
+
+def tree_signature(folder: Path) -> str | None:
+    """A hash of the names, sizes and modification times of the files under folder (None if it is missing)."""
+    if not folder.is_dir():
+        return None
+    entries = []
+    for root, _, files in os.walk(folder):
+        for name in files:
+            with contextlib.suppress(OSError):
+                st = Path(root, name).stat()
+                entries.append(f'{Path(root, name).relative_to(folder)}\0{st.st_size}\0{st.st_mtime_ns}')
+    return hashlib.sha1('\n'.join(sorted(entries)).encode()).hexdigest()[:16]
+
+
+def archive_session(src: Path) -> bool:
+    """Copies the transcript src (under PROJECTS) and its session's folder, compressed, to ARCHIVE/<its project
+    folder>/ as <session id>.jsonl.zst and .tar.zst (.gz without zstd), unless neither changed since they
+    were last copied (as <session id>.meta.json says). Returns whether anything was copied.
+    """
+    sid, dest_dir = session_id(src), ARCHIVE / src.parent.name
+    meta_path, dest, tar = (dest_dir / f'{sid}{ext}' for ext in ('.meta.json', f'.jsonl{ARCHIVE_EXT}', f'.tar{ARCHIVE_EXT}'))
+    try:
+        meta = json.loads(meta_path.read_text())
+    except (OSError, ValueError):
+        meta = {}
+    st, folder = src.stat(), src.parent / sid
+    stats, signature, copied = [st.st_size, st.st_mtime_ns], tree_signature(folder), False
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    if meta.get('transcript') != stats or not dest.exists():
+        tmp = dest.with_name(f'.{dest.name}.{os.getpid()}.tmp')
+        with src.open('rb') as f, (zstd.open(tmp, 'wb') if zstd else gzip.open(tmp, 'wb')) as out:
+            shutil.copyfileobj(f, out, 1 << 20)
+        os.utime(tmp, ns=(st.st_atime_ns, st.st_mtime_ns))   # (archived sessions sort by their last activity too)
+        os.replace(tmp, dest)
+        (dest_dir / f'{sid}.jsonl{".gz" if zstd else ".zst"}').unlink(missing_ok=True)   # (by a Python with(out) zstd)
+        copied = True
+    if signature and (meta.get('folder') != signature or not tar.exists()):
+        tmp = tar.with_name(f'.{tar.name}.{os.getpid()}.tmp')
+        with tarfile.open(tmp, 'w:zst' if zstd else 'w:gz') as t:
+            t.add(folder, arcname=sid)
+        os.replace(tmp, tar)
+        copied = True
+    if copied:
+        meta.update(project=meta.get('project') or str(transcript_project(src) or ''), transcript=stats, folder=signature,
+            archived=f'{dt.datetime.now():%Y-%m-%d %H:%M:%S}')
+        write_atomic(meta_path, json.dumps(meta) + '\n')
+    return copied
+
+
+def archive_all() -> int:
+    """archive_session() for every transcript under PROJECTS. Returns how many were (re)copied."""
+    copied = 0
+    for src in sorted(PROJECTS.glob('*/*.jsonl')):
+        try:
+            copied += archive_session(src)
+        except Exception as e:   # (archiving one must not stop the run)
+            print(f'warning: could not archive {src}: {e}', file=sys.stderr)
+    return copied
+
+
+def cleanup_warning() -> str | None:
+    """A warning about the transcripts Claude Code will delete within CLEANUP_WARN days, by its
+    cleanupPeriodDays (that it did not warn about before), or about cleanupPeriodDays being invalid.
+    """
+    settings = CLAUDE_DIR / 'settings.json'
+    try:
+        days = json.loads(settings.read_text()).get('cleanupPeriodDays', CLEANUP_DAYS)
+    except (OSError, ValueError, AttributeError):
+        days = CLEANUP_DAYS
+    fix = f'"cleanupPeriodDays": 36500 in {tilde(settings)} (a number of days, at least 1: 0 is invalid)'
+    if type(days) is not int or days < 1:
+        return (f'warning: "cleanupPeriodDays": {json.dumps(days)} in {tilde(settings)} is invalid (Claude Code wants a '
+            f'number of days, at least 1, and pauses its cleanup while its settings are invalid). To keep transcripts '
+            f'for long, set e.g. {fix}')
+    warned_path, now = DATA / 'cleanup-warned.json', time.time()
+    try:
+        warned = json.loads(warned_path.read_text())
+    except (OSError, ValueError):
+        warned = {}
+    soon = sorted((days - (now - f.stat().st_mtime) / 86400, f) for f in PROJECTS.glob('*/*.jsonl'))
+    new = [(left, f) for left, f in soon if left < CLEANUP_WARN and session_id(f) not in warned]
+    if not new:
+        return None
+    lines = []
+    for left, f in new:
+        info = session_info(OUT_ROOT / f.parent.name / f'{session_id(f)}.html') or {}
+        last = dt.datetime.fromtimestamp(f.stat().st_mtime)
+        lines.append(f'  {plural(max(0, round(left)), "day")} left: {transcript_project(f) or f.parent.name}  {session_id(f)[:8]}'
+            f'  "{info.get("name", "(not rendered)")}"  (last active {last:%Y-%m-%d})')
+        warned[session_id(f)] = f'{dt.datetime.now():%Y-%m-%d}'
+    write_atomic(warned_path, json.dumps(warned) + '\n')
+    return (f'note: Claude Code deletes transcripts {days} days after they were last written to ("cleanupPeriodDays" in '
+        f'{tilde(settings)}, or {CLEANUP_DAYS} if unset), so within {CLEANUP_WARN} days it will delete these:\n'
+        + '\n'.join(lines) + f'\nThey are archived in {tilde(ARCHIVE)}, so their pages, searches, stars and hidden turns '
+        f'stay, but `claude --resume` will not find them. To keep Claude Code\'s own copies, set e.g. {fix}.')
+
+
+def make_private(*folders: Path) -> None:
+    """Makes folders and everything in them readable only by you (folders 700, files 600)."""
+    for folder in folders:
+        for root, dirs, files in os.walk(folder):
+            os.chmod(root, 0o700)
+            for name in files:
+                with contextlib.suppress(OSError):
+                    os.chmod(Path(root, name), 0o600)
+
+
+def migrate() -> None:
+    """Moves what earlier versions kept in LEGACY_OUT (readable by everyone) to DATA (stars, hidden turns) and
+    OUT_ROOT (pages), readable only by you, and removes LEGACY_OUT.
+    """
+    for folder in (DATA, OUT_ROOT):
+        folder.mkdir(parents=True, exist_ok=True)
+        folder.chmod(0o700)
+    if not LEGACY_OUT.is_dir():
+        return
+    for old, new in ((LEGACY_OUT / '.starred.json', MARKS['star']), (LEGACY_OUT / '.hidden.json', MARKS['hide'])):
+        if old.exists() and not new.exists():
+            shutil.move(old, new)
+    for folder in LEGACY_OUT.iterdir():
+        if folder.is_dir():
+            (OUT_ROOT / folder.name).mkdir(exist_ok=True)
+            for f in folder.iterdir():   # (pages already rendered here win)
+                if not (OUT_ROOT / folder.name / f.name).exists():
+                    shutil.move(f, OUT_ROOT / folder.name / f.name)
+    shutil.rmtree(LEGACY_OUT)   # (the rest: what every run rebuilds, lock files, and pages already moved)
+    make_private(DATA, OUT_ROOT)
+    print(f'note: moved the pages, stars and hidden turns of earlier versions from {tilde(LEGACY_OUT)} to {tilde(OUT_ROOT)} '
+        f'and {tilde(DATA)}, readable only by you', file=sys.stderr)
 
 
 def projects_below(base: Path, depth: int) -> tuple:
     """The projects (directories Claude Code sessions were started in) that are base or at most depth
-    directories below it (any depth if depth is 0), as [(directory, its folder under PROJECTS)], and how
-    many more there are further down.
+    directories below it (any depth if depth is 0), as [(directory, its folder name under PROJECTS)], and
+    how many more there are further down.
     """
     prefix, found, deeper = project_slug(base), [], 0
-    for folder in sorted(PROJECTS.iterdir()) if PROJECTS.is_dir() else []:
-        if not (folder.name.startswith(prefix) and folder.is_dir()):
+    for folder in project_folders():
+        if not folder.startswith(prefix):
             continue
         # folder names lose which characters were '/': the real directory is in the transcripts
         project = next(filter(None, map(transcript_project, find_sessions(folder))), None)
@@ -1450,7 +1649,7 @@ def projects_below(base: Path, depth: int) -> tuple:
 class Sessions:
     """The sessions a run renders (see the help), picked again by each --watch pass where that can change
     (not for the Claude Code session the run is part of, -s with an id, or -j). pick() returns them as [(transcript,
-    project directory, its folder name under PROJECTS, which is also its folder under OUT_ROOT)]. notes
+    project directory, its folder name under PROJECTS, which is also its folder under ARCHIVE and OUT_ROOT)]. notes
     has what the first pick() found worth saying, and extra the arguments for restart_command().
     """
     def __init__(self, args):
@@ -1474,11 +1673,12 @@ class Sessions:
                 return
         else:
             self.base = Path.cwd().resolve()
-        if args.recursive or (PROJECTS / project_slug(self.base)).is_dir():
+        if args.recursive or find_sessions(project_slug(self.base)):
             return
         if args.project:
-            sys.exit(f'no Claude Code session was started in {self.base} (no {PROJECTS / project_slug(self.base)})')
-        up = next((d for d in self.base.parents if (PROJECTS / project_slug(d)).is_dir()), None)
+            sys.exit(f'no Claude Code session was started in {self.base} (none in {PROJECTS / project_slug(self.base)}, '
+                'or archived)')
+        up = next((d for d in self.base.parents if find_sessions(project_slug(d))), None)
         below = len(projects_below(self.base, 0)[0])
         hint = f' (-r renders the {plural(below, "project")} below it)' if below else ''
         if up is None:
@@ -1498,20 +1698,20 @@ class Sessions:
                 self.notes.append(f'note: -r looks at most {RECURSE_DEPTH} directories below {self.base}{left}; '
                     '-d N to change that, -d 0 for no limit')
         else:
-            projects = [(self.base, PROJECTS / project_slug(self.base))]
+            projects = [(self.base, project_slug(self.base))]
         picked = []
         for project, folder in projects:
             files = find_sessions(folder)
             if args.session == '':   # -s alone: the latest
                 files = files[:1]
             elif args.session:
-                files = [f for f in files if f.stem.startswith(args.session)]
-            picked += [(f, project, folder.name) for f in files]
+                files = [f for f in files if session_id(f).startswith(args.session)]
+            picked += [(f, project, folder) for f in files]
         if args.session:   # an id (or its start): the most recent match
             picked.sort(key=lambda x: x[0].stat().st_mtime, reverse=True)
             if len(picked) > 1:
                 self.notes.append(f'note: {len(picked)} sessions start with "{args.session}"; rendering the most '
-                    f'recently active one, {picked[0][0].stem}')
+                    f'recently active one, {session_id(picked[0][0])}')
             self.fixed = picked = picked[:1]
         self.first = False
         return picked
@@ -1522,8 +1722,7 @@ def unserved_warnings(port: int, pages: list) -> list:
     while this run (with --no-serve) did not add its pages (paths under OUT_ROOT) to those it shows: a
     warning saying so (or a note, if it shows them anyway).
     """
-    ports = {port} | {int(m.group(1)) for f in (Path.home() / '.claude').glob('conversation-server-*.pid')
-        if (m := re.fullmatch(r'conversation-server-(\d+)[.]pid', f.name))}
+    ports = {port, *pid_files()}
     out = []
     for port in sorted(ports):
         if server_status(port) != 'ours':
@@ -1548,8 +1747,7 @@ class ParagraphsHelpFormatter(argparse.HelpFormatter):
 def arg_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description='\n\n'.join(__doc__.split('\n\n')[:2]),
         formatter_class=ParagraphsHelpFormatter)
-    ap.add_argument('-p', '--project', type=Path, help='project directory (default: that of the Claude Code session '
-        'this is run from, else the current directory, or the nearest one above it that is a project)')
+    ap.add_argument('-p', '--project', type=Path, help='project directory (default: see above)')
     ap.add_argument('-s', '--session', nargs='?', const='', metavar='ID', help='render only the most recently '
         'active session (of each project, with -r; when run from Claude Code, the session you are in), or with ID the '
         'most recent one whose id starts with ID (default: all the sessions). As it takes an optional value, give it '
@@ -1563,8 +1761,9 @@ def arg_parser() -> argparse.ArgumentParser:
     ap.add_argument('-o', '--open', action='store_true', help='open the printed URL in the browser (xdg-open)')
     ap.add_argument('-w', '--watch', type=int, nargs='?', const=WATCH_INTERVAL, default=0, metavar='SEC',
         help=f'regenerate every SEC seconds (default: {WATCH_INTERVAL}) until Ctrl+C, picking the sessions again each '
-        'time (see above); as it takes an optional number, give it on its own or last when combining short options '
-        '(-rw, not -wr)')
+        'time, so it follows new sessions (unless -s was given an ID, or picked the session this is run from); only '
+        'changed transcripts are rendered again. As it takes an optional number, give it on its own or last when '
+        'combining short options (-rw, not -wr)')
     ap.add_argument('-n', '--no-serve', action='store_true', help='only write the pages, and print file:// URLs: '
         'no background server (which is otherwise started, unless running, for the pages of these projects, or only '
         'of the sessions given with -s / -j; see above). Also for hooks and scripts that only need the files')
@@ -1579,6 +1778,7 @@ def arg_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
+    os.umask(0o077)   # (everything written is readable only by you)
     ap = arg_parser()
     args = ap.parse_args()
     if args._server:
@@ -1590,6 +1790,8 @@ def main() -> None:
     if args.jsonl and (args.project or args.session is not None or args.recursive):
         ap.error('-j/--jsonl renders that transcript as part of the project it was recorded in: '
             'it cannot be combined with -p, -s or -r')
+    migrate()
+    archive_all()
     sessions = Sessions(args)
     picked = sessions.pick()
     if not picked:
@@ -1598,7 +1800,7 @@ def main() -> None:
     def scope_of(picked):   # what the server shows for these: their projects, or with -s / -j only them
         out = []
         for f, project, slug in picked:
-            x = dict(project=str(project), slug=slug, session=f.stem if (args.session is not None or args.jsonl) else None)
+            x = dict(project=str(project), slug=slug, session=session_id(f) if (args.session is not None or args.jsonl) else None)
             if x not in out:
                 out.append(x)
         return out
@@ -1615,27 +1817,34 @@ def main() -> None:
                 file=sys.stderr)
     else:
         serve = False
-    first_pass, seen = True, set()
+    first_pass, seen, rendered = True, set(), {}   # rendered: {page: (transcript size and time, page)}
     while True:
         try:
             if not first_pass:
+                archive_all()
                 picked = sessions.pick()
                 if serve:   # (again each time: the server may have been restarted by another run since)
                     with contextlib.suppress(OSError):   # (or be gone)
                         post_json(args.port, '/_scope', scope_of(picked))
             outs = []
             for f, project, slug in picked:
-                out = OUT_ROOT / slug / f'{f.stem}.html'
+                out = OUT_ROOT / slug / f'{session_id(f)}.html'
                 outs.append(out)
+                st = f.stat()
+                if out in rendered and rendered[out][0] == (st.st_size, st.st_mtime_ns) and out.exists():
+                    write_page(out, rendered[out][1])   # unchanged: only its generation time (in the title line)
+                    continue
                 turns, name = build_turns(f)
                 prompts = [t for t in turns if t['kind'] == 'prompt']
                 if not name:   # untitled: fall back to the start of the first prompt
                     first = prompts[0]['prompt'].split('\n')[0] if prompts else ''
                     name = (first[:60] + '...') if len(first) > 60 else first or '(empty session)'
                 out.parent.mkdir(parents=True, exist_ok=True)
-                write_atomic(out.with_suffix('.search.js'), search_js(turns, f.stem))
-                write_page(out, render(turns, name, f, project, header_html('../index.html'), '../', out.with_suffix('.marks.js').name))
-                sync_marks(out, f.stem, name, turn_rows(turns))
+                write_atomic(out.with_suffix('.search.js'), search_js(turns, session_id(f)))
+                page = render(turns, name, f, project, header_html('../index.html'), '../', out.with_suffix('.marks.js').name)
+                write_page(out, page)
+                rendered[out] = ((st.st_size, st.st_mtime_ns), page)
+                sync_marks(out, session_id(f), name, turn_rows(turns))
                 if args.verbose:
                     print(f'{url_for(out, base) if base else out}  "{name}"  ({plural(len(prompts), "prompt")})', flush=True)
                 elif not first_pass and out not in seen:   # e.g. a new session, picked by --watch
@@ -1643,8 +1852,9 @@ def main() -> None:
                 seen.add(out)
             index, n_sessions, n_projects = write_index(header_html())
             if first_pass:
-                for note in sessions.notes + (unserved_warnings(args.port, outs) if args.no_serve else []):
-                    print(note, file=sys.stderr, flush=True)
+                for note in [*sessions.notes, cleanup_warning(), *(unserved_warnings(args.port, outs) if args.no_serve else [])]:
+                    if note:
+                        print(note, file=sys.stderr, flush=True)
             if args.verbose:
                 print(f'index of all rendered sessions: {url_for(index, base)}  ({plural(n_sessions, "session")} in {plural(n_projects, "project")})', flush=True)
             elif first_pass:
