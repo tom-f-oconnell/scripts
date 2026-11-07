@@ -13,7 +13,7 @@ conversation's context; with respondToBashCommands false in settings.json Claude
     claude-conversation                 # latest session of this directory -> HTML, prints its file:// URL
     claude-conversation --open          # ... and open it in the browser
     claude-conversation --session <id-prefix> | --jsonl <file> | --all   # other sessions
-    claude-conversation --watch 20 --open   # regenerate every 20 s until Ctrl+C
+    claude-conversation --watch --open  # regenerate every 30 s (--watch SEC: every SEC s) until Ctrl+C
     claude-conversation --serve         # ... and print an http:// URL instead (see below)
     claude-conversation --stop-server
 Output: ~/.claude/conversations/<project-slug>/<session-id>.html (override with --out), and next to it
@@ -90,6 +90,7 @@ from pathlib import Path
 PROJECTS = Path.home() / '.claude' / 'projects'
 OUT_ROOT = Path.home() / '.claude' / 'conversations'
 SERVER_PORT = 10041
+WATCH_INTERVAL = 30       # seconds between --watch passes, unless given
 IDLE_TIMEOUT = 30 * 60   # the server stops itself after this long with no page open and no --watch run
 TAB_TIMEOUT = 3 * 60     # a tab counts as open while it has asked within this long (hidden tabs ask less often)
 VERSION_TAG = 'claude-conversation-version'
@@ -1271,7 +1272,8 @@ def main() -> None:
     ap.add_argument('--all', action='store_true', help='render every session of the project')
     ap.add_argument('--out', type=Path, help='output HTML path (single session)')
     ap.add_argument('--open', action='store_true', help='open the page in the browser (xdg-open)')
-    ap.add_argument('--watch', type=int, default=0, metavar='SEC', help='regenerate every SEC seconds until Ctrl+C')
+    ap.add_argument('--watch', type=int, nargs='?', const=WATCH_INTERVAL, default=0, metavar='SEC',
+        help=f'regenerate every SEC seconds (default: {WATCH_INTERVAL}) until Ctrl+C')
     ap.add_argument('--serve', action='store_true',
         help='start a background HTTP server (unless running) for the pages of this project (or only of the sessions '
         'given with --session / --jsonl), and print http:// URLs')
