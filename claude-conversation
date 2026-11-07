@@ -9,9 +9,9 @@ with -s ID the most recent one whose id starts with ID. -r/--recursive also rend
 directories below the project's (or below the current directory, even if it is not one), at most
 -d/--depth levels down (3 by default; 0: no limit); with -s, the latest session of each. -w/--watch picks
 again on every pass, so it follows new sessions (unless -s was given an id, or picked the session you are
-in). With -e/--serve, the server only shows the rendered sessions of those projects (including ones
-rendered by earlier runs), or with -s only the sessions rendered this time; a later -e run using the same
-server adds its own. Pages opened as files are not limited like that: their index
+in). The server (see below) only shows the rendered sessions of those projects (including ones rendered
+by earlier runs), or with -s only the sessions rendered this time; a later run using the same server adds
+its own. Pages opened as files are not limited like that: their index
 (~/.claude/conversations/index.html) lists every session rendered so far, from any project.
 
 Reads the session's JSONL under ~/.claude/projects/<project-slug>/ and writes an HTML page: a numbered
@@ -22,12 +22,12 @@ folded under each turn. Tool calls, tool results and thinking are left out. Stdl
 
 Usage (e.g. with Claude Code's `!` prefix, whose output is added to the conversation's context; with
 respondToBashCommands false in settings.json Claude does not reply to it):
-    claude-conversation                 # all sessions of this project -> HTML, prints the index's URL
+    claude-conversation                 # all sessions of this project -> HTML, served; prints the index's URL
     claude-conversation -s              # only this session (else this directory's latest), printing its URL
     claude-conversation -o              # ... and open the printed URL in the browser (--open)
     claude-conversation -s <id-prefix> | -r | -j <file>   # other sessions (see above)
-    claude-conversation -w -o           # regenerate every 30 s (-w SEC: every SEC s) until Ctrl+C (--watch)
-    claude-conversation -e              # ... and print an http:// URL instead (--serve; see below)
+    claude-conversation -w              # regenerate every 30 s (-w SEC: every SEC s) until Ctrl+C (--watch)
+    claude-conversation -n              # only write the pages, and print a file:// URL (--no-serve)
     claude-conversation --stop-server
 Output: ~/.claude/conversations/<project-slug>/<session-id>.html, and next to it <session-id>.search.js
 (its prompts and answers, for searches), <session-id>.marks.js and <session-id>.version.js. Every run
@@ -48,26 +48,31 @@ Either star stars (or unstars) the turn, and "hide" hides the turn (prompt and a
 The prompt list shows starred turns first, unless its "starred first" box is unticked. Hidden turns are
 left out of the page, its prompt list and its searches, and of the index's search, unless "show hidden"
 is ticked (on either page; the turns are then dimmed); next to it is how many turns are hidden (on the
-index, in the sessions it lists). The --serve server saves stars and hidden turns (pages opened as files
+index, in the sessions it lists). The server saves stars and hidden turns (pages opened as files
 show them but cannot change them), with their prompts and answers, to ~/.claude/conversations/.starred.json
 and .hidden.json, whose entries later runs keep up to date with the transcript (e.g. an answer that was
 still being written).
 
--e/--serve starts a background HTTP server for ~/.claude/conversations on all interfaces (port 10041 by
-default; --port), unless it is already running, and prints http:// URLs instead of file:// ones. Their
-host is the address this machine was reached at over SSH (from $SSH_CONNECTION, so the link works from
-the SSH client's browser), else localhost. The server only serves the sessions of the run's projects, or
-with -s / -j only those sessions (see above). Runs sharing a server (the same port) add theirs to those
-it shows, and its index lists them all, until it stops. A run without -e only warns when a server is
-running that does not show its pages. The server has no access control: anyone who can reach the port can
-read what it shows. When it cannot be reached, pages viewed through it say so below their title line, with
-the command (and directory) of the run that started it, to restart it (with that run's sessions only).
-The server runs until --stop-server, or until it has gone 30 min with no page open and no
-`claude-conversation -w` running. A running server from an older version of this script is replaced.
-Ctrl+C in a -w -e run in a terminal asks what to do: stop the server and exit (the default, also on
-another Ctrl+C), "n" to carry on watching (the question is then cleared), or "b" to exit and leave the
-server running in the background. When another -w -e run uses the same server, the question says so and
-the default (also on another Ctrl+C) is "b" instead, so the other run keeps its server; "y" stops it.
+Each run (unless -n/--no-serve) also starts a background HTTP server for ~/.claude/conversations (port
+10041 by default; --port), unless it is already running, and prints http:// URLs instead of file:// ones.
+The server listens on localhost and on this machine's LAN address, which the URLs use: the address an SSH
+connection the run is under reached it at (found through the processes it runs under, and in tmux through
+the client attached to its session), else that of the machine's default route. Only private addresses
+count (10.x, 172.16-31.x, 192.168.x, and 100.64-127.x as used by e.g. Tailscale): without one, e.g. on a
+machine with only a public address, the server only listens on localhost. A running server that does not
+listen on the address a run wants is restarted there, keeping what it shows. The server only serves the
+sessions of the run's projects, or with -s / -j only those sessions (see above). Runs sharing a server
+(the same port) add theirs to those it shows, and its index lists them all, until it stops. A run with -n
+only warns when a server is running that does not show its pages. The server has no access control:
+anyone who can reach its LAN address can read what it shows. When it cannot be reached, pages viewed
+through it say so below their title line, with the command (and directory) of the run that started it, to
+restart it (with that run's sessions only). The server runs until --stop-server, or until it has gone 30
+min with no page open and no `claude-conversation -w` running. A running server from an older version of
+this script is replaced. Ctrl+C in a -w run (without -n) in a terminal asks what to do: stop the server
+and exit (the default, also on another Ctrl+C), "n" to carry on watching (the question is then cleared),
+or "b" to exit and leave the server running in the background. When another -w run uses the same server,
+the question says so and the default (also on another Ctrl+C) is "b" instead, so the other run keeps its
+server; "y" stops it.
 """
 from __future__ import annotations
 
@@ -80,6 +85,7 @@ import functools
 import glob
 import hashlib
 import html
+import ipaddress
 import http.client
 import http.server
 import io
@@ -108,7 +114,9 @@ IDLE_TIMEOUT = 30 * 60   # the server stops itself after this long with no page 
 TAB_TIMEOUT = 3 * 60     # a tab counts as open while it has asked within this long (hidden tabs ask less often)
 VERSION_TAG = 'claude-conversation-version'
 GENERATED_TAG = 'claude-conversation-generated'
-SERVER_API = 3           # bumped when what pages ask the server changes: a running older server is replaced
+SERVER_API = 4           # bumped when what pages ask the server changes: a running older server is replaced
+# private IPv4 ranges the server listens on, besides localhost (the last: shared address space, e.g. Tailscale)
+LAN_NETWORKS = [ipaddress.ip_network(n) for n in ('10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', '100.64.0.0/10')]
 # the starred and the hidden turns, with their prompts and answers, and the field of when each was marked
 MARKS = {'star': OUT_ROOT / '.starred.json', 'hide': OUT_ROOT / '.hidden.json'}
 MARKED_FIELD = {'star': 'starred', 'hide': 'hidden'}
@@ -317,7 +325,7 @@ LIVE_JS = """
 (function(){
  const V=document.querySelector('meta[name="VERSION_TAG"]').content,Q=document.getElementById('q');
  const live=document.getElementById('live'),gen=document.getElementById('gen');
- let stale=false,down=false,latest,restart='claude-conversation --serve',timer,busy=false;
+ let stale=false,down=false,latest,restart='claude-conversation',timer,busy=false;
  const searching=()=>Q&&(Q.value.trim()!==''||document.activeElement===Q),key='ccReloadFor'+location.pathname;
  function reload(){try{sessionStorage[key]=latest;}catch(e){}location.reload();}
  function show(){   // the notice under the title line: server gone, else page changed during a search
@@ -516,13 +524,13 @@ async function mark(btn,kind){   // kind: 'star' or 'hide'
 function cp(id,btn){const t=document.getElementById(id).dataset.raw;   // (button labels are CSS, so searches skip them)
  const done=()=>{btn.dataset.l='copied';setTimeout(()=>btn.dataset.l='copy',1200);};
  if(navigator.clipboard&&window.isSecureContext)return navigator.clipboard.writeText(t).then(done);
- // no clipboard API over plain http to another machine (e.g. --serve over a VPN)
+ // no clipboard API over plain http to another machine (e.g. served over a VPN)
  const a=document.createElement('textarea');a.value=t;a.style.position='fixed';a.style.opacity='0';
  document.body.append(a);a.select();try{if(document.execCommand('copy'))done();}finally{a.remove();}}
 (function(){
  try{document.getElementById('starfirst').checked=localStorage.ccStarFirst!=='0';}catch(e){}
  document.getElementById('showhid').checked=!ccHiding();
- const ro='stars and hidden turns can only be changed on pages served by claude-conversation --serve';
+ const ro='stars and hidden turns can only be changed on pages served by claude-conversation (not -n)';
  document.querySelectorAll('button.star').forEach(b=>{b.title=SERVED?'star this prompt and answer (saved in ~/.claude/conversations/.starred.json)':ro;b.classList.toggle('ro',!SERVED);});
  document.querySelectorAll('button.hide').forEach(b=>{b.title=SERVED?'hide this prompt and answer (saved in ~/.claude/conversations/.hidden.json)':ro;b.classList.toggle('ro',!SERVED);});
  showMarks();(window.ccMarksQ||[]).forEach(ccMarks);   // the marks loaded in <head>
@@ -891,7 +899,7 @@ def scope_note(scope: list) -> str:
         by_project.setdefault(x['project'], set()).add(x['session'])
     parts = [p if None in ss else f'{p} ({"session" if len(ss) == 1 else "sessions"} {", ".join(sorted(x[:8] for x in ss))})'
         for p, ss in by_project.items()]
-    return 'this server only shows ' + ('; '.join(parts) or 'nothing') + ' (as asked by the --serve runs using it)'
+    return 'this server only shows ' + ('; '.join(parts) or 'nothing') + ' (as asked by the runs using it)'
 
 
 class QuietHandler(http.server.SimpleHTTPRequestHandler):
@@ -917,7 +925,7 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
         self.get(head=False)
 
     def get(self, head: bool) -> None:
-        srv = self.server
+        srv = self.server.state
         url = urllib.parse.urlsplit(self.path)
         path = urllib.parse.unquote(url.path)
         if path != '/_status':   # the command line asking does not keep the server up
@@ -940,7 +948,8 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
                 answer['marks'] = marks
             return self.send_json(answer)
         if path == '/_status':
-            return self.send_json({'tabs': open_tabs(srv), 'watch': watch_running(), 'api': SERVER_API, 'scope': srv.scope})
+            return self.send_json({'tabs': open_tabs(srv), 'watch': watch_running(), 'api': SERVER_API, 'scope': srv.scope,
+                'hosts': srv.hosts})
         if path in ('/', '/index.html'):
             return self.send_body(self.fill_title(scoped_index(srv)['page']), 'text/html; charset=utf-8', head)
         if path == '/sessions.js':
@@ -959,12 +968,12 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
         """page with this server's details in its title line: the address the browser reached it at, the
         host name and the pid (so they are right whichever run wrote the page).
         """
-        where = self.headers.get('Host') or server_base(self.server.server_address[1]).removeprefix('http://')
+        where = self.headers.get('Host') or self.server.state.hosts[-1]
         details = f'served from {where} on {socket.gethostname()} · server pid {os.getpid()} · '
         return page.replace(SERVER_SLOT.encode(), f'<span id="srv">{html.escape(details)}</span>'.encode(), 1)
 
     def do_POST(self):
-        srv = self.server
+        srv = self.server.state
         srv.last_request = time.monotonic()
         try:
             body = json.loads(self.rfile.read(int(self.headers.get('Content-Length') or 0)) or b'null')
@@ -1061,13 +1070,13 @@ def watch_running() -> bool:
 
 
 def other_watch_runs(port: int) -> list:
-    """pids of the other --watch --serve runs using the server on port."""
-    return [pid for pid, args in script_runs() if pid != os.getpid() and args.watch and args.serve and args.port == port]
+    """pids of the other --watch runs using the server on port."""
+    return [pid for pid, args in script_runs() if pid != os.getpid() and args.watch and not args.no_serve and args.port == port]
 
 
-def stop_when_idle(srv) -> None:
-    """Shuts srv down once it has gone IDLE_TIMEOUT without requests (open pages make one every 2 s,
-    or about once a minute when hidden) while no --watch run was going.
+def stop_when_idle(srv, servers: list) -> None:
+    """Shuts servers (sharing the state srv) down once they have gone IDLE_TIMEOUT without requests (open
+    pages make one every 2 s, or about once a minute when hidden) while no --watch run was going.
     """
     last_watch = time.monotonic()
     while True:
@@ -1078,27 +1087,112 @@ def stop_when_idle(srv) -> None:
         if now - max(last_watch, srv.last_request) > IDLE_TIMEOUT:
             print(f'{dt.datetime.now():%Y-%m-%d %H:%M:%S} stopping: no page open and no --watch run for '
                 f'{IDLE_TIMEOUT // 60} min', flush=True)
-            return srv.shutdown()
+            for server in servers:
+                server.shutdown()
+            return
+
+
+class ServerState:
+    """What the server's sockets (QuietHandler.server.state) share."""
+    def __init__(self, port: int):
+        self.port, self.hosts = port, []
+        self.tabs, self.lock, self.last_request, self.index_cache = {}, threading.Lock(), time.monotonic(), None
+        # both set by ensure_server()
+        self.restart = os.environ.get('CLAUDE_CONVERSATION_RESTART', '')
+        self.scope = json.loads(os.environ.get('CLAUDE_CONVERSATION_SCOPE') or '[]')
 
 
 def run_server(port: int) -> None:
-    """Serves OUT_ROOT on all interfaces (the process that --serve starts) until killed, or until
-    stop_when_idle() stops it.
+    """Serves OUT_ROOT (the process that --serve starts) on localhost and on the LAN address given by
+    ensure_server() in $CLAUDE_CONVERSATION_LAN (if any), until killed, or until stop_when_idle() stops it.
     """
     handler = functools.partial(QuietHandler, directory=str(OUT_ROOT))
-    srv = http.server.ThreadingHTTPServer(('', port), handler)
-    srv.tabs, srv.lock, srv.last_request, srv.index_cache = {}, threading.Lock(), time.monotonic(), None
-    # both set by ensure_server()
-    srv.restart = os.environ.get('CLAUDE_CONVERSATION_RESTART', '')
-    srv.scope = json.loads(os.environ.get('CLAUDE_CONVERSATION_SCOPE') or '[]')
-    threading.Thread(target=stop_when_idle, args=(srv,), daemon=True).start()
-    srv.serve_forever()
+    state, servers = ServerState(port), []
+    for host in ['127.0.0.1', *filter(None, [os.environ.get('CLAUDE_CONVERSATION_LAN')])]:
+        try:
+            servers.append(http.server.ThreadingHTTPServer((host, port), handler))
+        except OSError as e:
+            if not servers:
+                raise
+            print(f'not listening on {host}: {e}', flush=True)   # (still serving localhost)
+            continue
+        servers[-1].state = state
+        state.hosts.append(host)
+    threading.Thread(target=stop_when_idle, args=(state, servers), daemon=True).start()
+    for server in servers[1:]:
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+    servers[0].serve_forever()
     pidfile = server_files(port)[0]
     try:
         if pidfile.read_text().strip() == str(os.getpid()):
             pidfile.unlink()
     except OSError:
         pass
+
+
+def env_ssh_address(pid: int) -> str | None:
+    """The server's address in the $SSH_CONNECTION of process pid (None if it has none)."""
+    try:
+        env = Path(f'/proc/{pid}/environ').read_bytes().split(b'\0')
+    except OSError:
+        return None
+    conn = next((e[len(b'SSH_CONNECTION='):].decode().split() for e in env if e.startswith(b'SSH_CONNECTION=')), [])
+    return conn[2] if len(conn) == 4 else None
+
+
+def ssh_address() -> str | None:
+    """The address of this machine that the SSH connection this run is (ultimately) under reached it at, or
+    None if it is not under one (as far as it can tell). It comes from the $SSH_CONNECTION of the process
+    that sshd (or mosh-server) started, up this process's ancestry; in tmux, from that of the tmux client
+    attached to its session (the most recently active one), as panes keep the environment they were
+    created with (tmux's own processes do not descend from the SSH connection).
+    """
+    pid, child = os.getpid(), None
+    while pid > 1:
+        try:
+            comm = Path(f'/proc/{pid}/comm').read_text().strip()
+            ppid = int(Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()[1])
+        except (OSError, ValueError, IndexError):
+            return None
+        if comm.startswith('sshd'):
+            return env_ssh_address(child) if child else None
+        if comm == 'mosh-server':
+            return env_ssh_address(pid)
+        if comm.startswith('tmux'):
+            pane = os.environ.get('TMUX_PANE')
+            try:
+                r = subprocess.run(['tmux', 'display-message', '-p', *(['-t', pane] if pane else []), '#{client_pid}'],
+                    capture_output=True, text=True, timeout=2)
+                return env_ssh_address(int(r.stdout))
+            except (OSError, ValueError, subprocess.SubprocessError):
+                return None   # (no client attached, or no tmux to ask)
+        child, pid = pid, ppid
+    return None
+
+
+def route_address() -> str | None:
+    """This machine's IPv4 address on its default route (None without one)."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(('192.0.2.1', 9))   # (UDP: only picks the route, sends nothing)
+            return s.getsockname()[0]
+    except OSError:
+        return None
+
+
+def is_lan(address: str) -> bool:
+    try:
+        return any(ipaddress.ip_address(address) in n for n in LAN_NETWORKS)
+    except ValueError:
+        return False
+
+
+def lan_address() -> str | None:
+    """The address the server listens on besides localhost: this machine's private (LAN_NETWORKS) address
+    that the SSH connection this run is under reached it at, else that of its default route, if private
+    (None if neither is, e.g. on a machine with only a public address).
+    """
+    return next((a for a in (ssh_address(), route_address()) if a and is_lan(a)), None)
 
 
 def server_status(port: int) -> str:
@@ -1131,28 +1225,35 @@ def restart_command(extra: list) -> str:
     return f'cd {shlex.quote(os.getcwd())} && {shlex.join([prog, *sys.argv[1:], *extra])}'
 
 
-def ensure_server(port: int, scope: list, extra: list) -> str:
-    """Starts the background server on port, to show the sessions in scope (see in_scope()), unless it is
-    running, in which case it adds them to those it shows. A running server from an older version of this
-    script (one without what pages now ask of it) is replaced. extra: for restart_command(). Returns
-    'started' or 'running'.
+def ensure_server(port: int, scope: list, extra: list) -> str | None:
+    """Starts the background server on port, listening on localhost and lan_address(), to show the sessions
+    in scope (see in_scope()), unless it is running, in which case it adds them to those it shows. A
+    running server that does not listen on that address, or is from an older version of this script (one
+    without what pages now ask of it), is replaced, keeping what it showed. extra: for restart_command().
+    Returns 'started' or 'running', or None (saying why) if it cannot serve.
     """
-    status = server_status(port)
+    lan, status = lan_address(), server_status(port)
     if status == 'ours':
-        if (server_state(port) or {}).get('api') == SERVER_API:
+        state = server_state(port) or {}
+        if state.get('api') == SERVER_API and (lan is None or lan in state.get('hosts', [])):
             try:
                 post_json(port, '/_scope', scope)
+                return 'running'
             except OSError as e:
-                sys.exit(f'could not add the sessions of this run to those the server on port {port} shows: {e}')
-            return 'running'
+                return print(f'warning: could not add the sessions of this run to those the server on port {port} '
+                    f'shows ({e}), so not serving them', file=sys.stderr)
+        why = (f'listens on {", ".join(state["hosts"])}, not {lan}' if state.get('api') == SERVER_API
+            else 'was from an older version of this script')
         stopped = stop_server(port)
         if server_status(port) != 'none':
-            sys.exit(f'the server on port {port} is from an older version of this script, and could not be replaced: {stopped}')
-        print(f'the server on port {port} was from an older version of this script: {stopped}, starting the current one',
-            file=sys.stderr)
+            return print(f'warning: the server on port {port} {why}, and could not be replaced ({stopped}), '
+                'so not serving', file=sys.stderr)
+        print(f'the server on port {port} {why}: {stopped}, starting it again', file=sys.stderr)
+        scope = [x for x in state.get('scope') or [] if x not in scope] + scope   # (keeping what it showed)
         status = 'none'
     if status == 'other':
-        sys.exit(f'port {port} is in use by another program (pick another with --port)')
+        return print(f'warning: port {port} is in use by another program, so not serving (pick another port with '
+            '--port)', file=sys.stderr)
     pidfile, logfile = server_files(port)
     OUT_ROOT.mkdir(parents=True, exist_ok=True)
     # own session and no inherited stdio, so it outlives this process and does not hold open the
@@ -1160,7 +1261,8 @@ def ensure_server(port: int, scope: list, extra: list) -> str:
     with logfile.open('w') as log:
         proc = subprocess.Popen([sys.executable, os.path.abspath(__file__), '--_server', str(port)],
             stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True,
-            env=dict(os.environ, CLAUDE_CONVERSATION_RESTART=restart_command(extra), CLAUDE_CONVERSATION_SCOPE=json.dumps(scope)))
+            env=dict(os.environ, CLAUDE_CONVERSATION_RESTART=restart_command(extra), CLAUDE_CONVERSATION_SCOPE=json.dumps(scope),
+                CLAUDE_CONVERSATION_LAN=lan or ''))
     for _ in range(50):
         if server_status(port) == 'ours':
             pidfile.write_text(f'{proc.pid}\n')
@@ -1168,7 +1270,7 @@ def ensure_server(port: int, scope: list, extra: list) -> str:
         if proc.poll() is not None:
             break
         time.sleep(0.1)
-    sys.exit(f'could not start the server on port {port} (see {logfile})')
+    print(f'warning: could not start the server on port {port} (see {logfile}), so not serving', file=sys.stderr)
 
 
 def server_pid(port: int) -> int | None:
@@ -1232,7 +1334,7 @@ def still_running(port: int) -> str:
 
 
 def at_exit_with_server(port: int, started: bool, watch: bool, asked: list) -> None:
-    """atexit hook of --serve runs, unless the run asked what to do at Ctrl+C (asked is not empty): says
+    """atexit hook of runs that serve, unless the run asked what to do at Ctrl+C (asked is not empty): says
     how to stop the server when a --watch run leaves it running, or when a run in a terminal has just
     started it.
     """
@@ -1246,10 +1348,10 @@ def at_exit_with_server(port: int, started: bool, watch: bool, asked: list) -> N
 
 
 def ask_at_ctrl_c(port: int) -> bool:
-    """After Ctrl+C in a --watch --serve run in a terminal, asks whether to stop the server and exit (the
+    """After Ctrl+C in a --watch run (that serves) in a terminal, asks whether to stop the server and exit (the
     default: anything but "n" or "b", including another Ctrl+C), carry on watching ("n": the question is
-    then cleared from the terminal), or exit leaving the server running ("b"). When other --watch --serve
-    runs use the server, the question says so and "b" is the default instead (anything but "y" or "n").
+    then cleared from the terminal), or exit leaving the server running ("b"). When other --watch runs
+    use the server, the question says so and "b" is the default instead (anything but "y" or "n").
     Returns whether to carry on.
     """
     how, others = '', []
@@ -1293,10 +1395,9 @@ def ask_at_ctrl_c(port: int) -> bool:
 
 
 def server_base(port: int) -> str:
-    """http:// URL of OUT_ROOT, at the address SSH reached this machine on (else localhost)."""
-    ssh = os.environ.get('SSH_CONNECTION', '').split()
-    host = ssh[2] if len(ssh) == 4 else 'localhost'
-    return f'http://{f"[{host}]" if ":" in host else host}:{port}'
+    """http:// URL of OUT_ROOT on the server on port, at its LAN address (else localhost)."""
+    host = next((h for h in (server_state(port) or {}).get('hosts', []) if h != '127.0.0.1'), 'localhost')
+    return f'http://{host}:{port}'
 
 
 def url_for(path: Path, base: str | None) -> str:
@@ -1418,7 +1519,7 @@ class Sessions:
 
 def unserved_warnings(port: int, pages: list) -> list:
     """For each server of this script that is running (on port, or on another one, as its pid file says)
-    while this run (without --serve) did not add its pages (paths under OUT_ROOT) to those it shows: a
+    while this run (with --no-serve) did not add its pages (paths under OUT_ROOT) to those it shows: a
     warning saying so (or a note, if it shows them anyway).
     """
     ports = {port} | {int(m.group(1)) for f in (Path.home() / '.claude').glob('conversation-server-*.pid')
@@ -1433,7 +1534,7 @@ def unserved_warnings(port: int, pages: list) -> list:
             out.append(f'note: the claude-conversation server that is running ({where}) shows these pages too')
         else:
             out.append(f'warning: a claude-conversation server is running ({where}), but this run does not add its '
-                'pages to those it shows (-e/--serve would)')
+                'pages to those it shows (it would without -n)')
     return out
 
 
@@ -1452,23 +1553,24 @@ def arg_parser() -> argparse.ArgumentParser:
     ap.add_argument('-s', '--session', nargs='?', const='', metavar='ID', help='render only the most recently '
         'active session (of each project, with -r; when run from Claude Code, the session you are in), or with ID the '
         'most recent one whose id starts with ID (default: all the sessions). As it takes an optional value, give it '
-        'on its own or last when combining short options (-e -s or -es, not -se)')
+        'on its own or last when combining short options (-r -s or -rs, not -sr)')
     ap.add_argument('-r', '--recursive', action='store_true', help='render the projects in the directory and in those '
         'below it (see -d): all their sessions, or with -s the latest of each (or the most recent match of -s ID)')
     ap.add_argument('-d', '--depth', type=int, metavar='N', help=f'with -r, look at most N directories down '
         f'(default: {RECURSE_DEPTH}; 0: no limit)')
     ap.add_argument('-j', '--jsonl', type=Path, help='a transcript file (one session) to render instead, as part of the '
-        'project it was recorded in, wherever this is run (so not with -p, -s or -r); with -e, the server shows only it')
+        'project it was recorded in, wherever this is run (so not with -p, -s or -r); the server shows only it')
     ap.add_argument('-o', '--open', action='store_true', help='open the printed URL in the browser (xdg-open)')
     ap.add_argument('-w', '--watch', type=int, nargs='?', const=WATCH_INTERVAL, default=0, metavar='SEC',
         help=f'regenerate every SEC seconds (default: {WATCH_INTERVAL}) until Ctrl+C, picking the sessions again each '
         'time (see above); as it takes an optional number, give it on its own or last when combining short options '
-        '(-ew, not -we)')
-    ap.add_argument('-e', '--serve', action='store_true',
-        help='start a background HTTP server (unless running) for the pages of these projects (or only of the '
-        'sessions given with -s / -j), and print http:// URLs')
-    ap.add_argument('--port', type=int, default=SERVER_PORT, help=f'port for --serve (default: {SERVER_PORT})')
-    ap.add_argument('--stop-server', action='store_true', help='stop the --serve server on --port and exit')
+        '(-rw, not -wr)')
+    ap.add_argument('-n', '--no-serve', action='store_true', help='only write the pages, and print file:// URLs: '
+        'no background server (which is otherwise started, unless running, for the pages of these projects, or only '
+        'of the sessions given with -s / -j; see above). Also for hooks and scripts that only need the files')
+    ap.add_argument('-e', '--serve', action='store_true', help=argparse.SUPPRESS)   # (the default now; still accepted)
+    ap.add_argument('--port', type=int, default=SERVER_PORT, help=f'port of the server (default: {SERVER_PORT})')
+    ap.add_argument('--stop-server', action='store_true', help='stop the server on --port and exit (implies -n)')
     ap.add_argument('--_server', type=int, help=argparse.SUPPRESS)
     ap.add_argument('-v', '--verbose', action='store_true',
         help='print each page path with its session name and prompt count, then the index URL '
@@ -1481,7 +1583,7 @@ def main() -> None:
     args = ap.parse_args()
     if args._server:
         return run_server(args._server)
-    if args.stop_server:
+    if args.stop_server:   # (implies -n)
         return print(stop_server(args.port))
     if args.depth is not None and (not args.recursive or args.depth < 0):
         ap.error('-d/--depth goes with -r/--recursive, and is 0 (no limit) or more')
@@ -1501,18 +1603,24 @@ def main() -> None:
                 out.append(x)
         return out
     base, asked = None, []   # asked: set once Ctrl+C in a --watch run asked what to do with the server, and the run is ending
-    if args.serve:
-        status = ensure_server(args.port, scope_of(picked), sessions.extra)
+    serve = not args.no_serve
+    if serve and (status := ensure_server(args.port, scope_of(picked), sessions.extra)):
         atexit.register(at_exit_with_server, args.port, started=status == 'started', watch=bool(args.watch), asked=asked)
         base = server_base(args.port)
         if args.verbose:
             print(f'server {"started" if status == "started" else "already running"}: {base}/', flush=True)
+        if base.startswith('http://localhost:') and ssh_address():
+            print(f'note: this machine has no LAN address, so the server only listens on localhost: to reach it from '
+                f'the machine you are connected from, forward the port (ssh -L {args.port}:localhost:{args.port} ...)',
+                file=sys.stderr)
+    else:
+        serve = False
     first_pass, seen = True, set()
     while True:
         try:
             if not first_pass:
                 picked = sessions.pick()
-                if args.serve:   # (again each time: the server may have been restarted by another run since)
+                if serve:   # (again each time: the server may have been restarted by another run since)
                     with contextlib.suppress(OSError):   # (or be gone)
                         post_json(args.port, '/_scope', scope_of(picked))
             outs = []
@@ -1535,7 +1643,7 @@ def main() -> None:
                 seen.add(out)
             index, n_sessions, n_projects = write_index(header_html())
             if first_pass:
-                for note in sessions.notes + ([] if args.serve else unserved_warnings(args.port, outs)):
+                for note in sessions.notes + (unserved_warnings(args.port, outs) if args.no_serve else []):
                     print(note, file=sys.stderr, flush=True)
             if args.verbose:
                 print(f'index of all rendered sessions: {url_for(index, base)}  ({plural(n_sessions, "session")} in {plural(n_projects, "project")})', flush=True)
@@ -1550,7 +1658,7 @@ def main() -> None:
                 break
             time.sleep(args.watch)
         except KeyboardInterrupt:   # the way --watch ends: no traceback (and --serve's atexit hook runs)
-            if args.serve and args.watch and sys.stdin.isatty() and sys.stderr.isatty():
+            if serve and args.watch and sys.stdin.isatty() and sys.stderr.isatty():
                 if ask_at_ctrl_c(args.port):
                     continue
                 asked.append(True)
