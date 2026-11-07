@@ -36,21 +36,33 @@ box, or the cursor in it): then a notice with a reload button says the page has 
 once the box is empty and left. A page's version is a hash of its content (apart from the title line),
 so regenerating it unchanged does not reload it.
 
+Each prompt and each answer has a star button at its top right, which stars (or unstars) the turn: both
+show it. The prompt list shows starred turns first, unless its "starred first" box is unticked. Stars are
+saved by the --serve server (pages opened as files show them but cannot change them), with the prompt and
+answer, to ~/.claude/conversations/.starred.json, whose entries later runs keep up to date with the
+transcript (e.g. an answer that was still being written).
+
 --serve starts a background HTTP server for ~/.claude/conversations on all interfaces (port 10041 by
 default; --port), unless it is already running, and prints http:// URLs instead of file:// ones. Their
 host is the address this machine was reached at over SSH (from $SSH_CONNECTION, so the link works from
-the SSH client's browser), else localhost. The server has no access control: anyone who can reach the
-port can read every rendered session. When the server cannot be reached, pages viewed through it say so
-below their title line, with the command (and directory) that started it, to restart it. The server
-runs until --stop-server, or until it has gone 30 min with no page open and no `claude-conversation
---watch` running. When a --watch run in a terminal ends (Ctrl+C), it asks whether to stop the server:
-anything but "n", including another Ctrl+C, stops it.
+the SSH client's browser), else localhost. The server only serves the sessions of the run's project (the
+current directory, or --project), or with --session / --jsonl only those sessions; a later --serve run
+using the same server adds its own (the index it serves lists only these). It has no access control:
+anyone who can reach the port can read those. When the server cannot be reached, pages viewed through it
+say so below their title line, with the command (and directory) that started it, to restart it. The
+server runs until --stop-server, or until it has gone 30 min with no page open and no
+`claude-conversation --watch` running. A running server from an older version of this script is
+replaced. Ctrl+C in a --watch run in a terminal asks what to do: stop the server and exit (the default,
+also on another Ctrl+C), "n" to carry on watching (the question is then cleared), or "b" to exit and
+leave the server running in the background.
 """
 from __future__ import annotations
 
 import argparse
 import atexit
+import contextlib
 import datetime as dt
+import fcntl
 import functools
 import hashlib
 import html
@@ -78,6 +90,8 @@ IDLE_TIMEOUT = 30 * 60   # the server stops itself after this long with no page 
 TAB_TIMEOUT = 3 * 60     # a tab counts as open while it has asked within this long (hidden tabs ask less often)
 VERSION_TAG = 'claude-conversation-version'
 GENERATED_TAG = 'claude-conversation-generated'
+SERVER_API = 2           # bumped when what pages ask the server changes: a running older server is replaced
+STARRED = OUT_ROOT / '.starred.json'   # the starred turns, with their prompts and answers
 # filled in by write_page(), after hashing the rest of the page for its version
 VERSION_SLOT, GENERATED_SLOT = '\0version\0', '\0generated\0'
 TAGS_NOT_PROMPT = ('<task-notification', '<system-reminder', '<local-command', '<command-name',
@@ -165,7 +179,7 @@ def build_turns(path: Path):
             if kind == 'prompt' and text_of(o['message']['content']).strip() in shell_cmds:
                 kind = 'other'
             if kind in ('prompt', 'summary'):
-                cur = dict(kind=kind, time=local_time(o.get('timestamp', '')),
+                cur = dict(kind=kind, time=local_time(o.get('timestamp', '')), key=o.get('uuid') or '',
                     prompt=text_of(o['message']['content']).strip(), texts=[], later=[],
                     n_tools=0, after_event=False, tools_since_event=0)
                 turns.append(cur)
@@ -304,10 +318,11 @@ LIVE_JS = """
  if(Q){const idle=()=>{let tried;try{tried=sessionStorage[key];}catch(e){}if(stale&&!searching()&&tried!==latest)reload();};Q.addEventListener('input',idle);Q.addEventListener('blur',idle);}
  let check;
  if(location.protocol==='file:'){
-  const src=location.href.split(/[?#]/)[0].replace(/[.]html$/,'.version.js');
+  const base=location.href.split(/[?#]/)[0].replace(/[.]html$/,'');
+  const load=src=>{const s=document.createElement('script');s.src=src+'?t='+Date.now();s.onload=s.onerror=()=>s.remove();document.head.append(s);};
   window.ccVersion=seen;
-  check=()=>{const s=document.createElement('script');s.src=src+'?t='+Date.now();s.onload=s.onerror=()=>s.remove();document.head.append(s);};
-  setInterval(check,2000);
+  check=()=>{load(base+'.version.js');if(window.ccStars)load(base+'.stars.js');};
+  check();setInterval(check,2000);
  }else{
   const tab=sessionStorage.ccTab||(sessionStorage.ccTab=Math.random().toString(36).slice(2));
   check=async function(){
@@ -317,6 +332,7 @@ LIVE_JS = """
     const j=await r.json();if(j.restart)restart=j.restart;
     if(down){down=false;show();}
     seen(j.version,j.generated);
+    if(j.stars&&window.ccStars)ccStars(j.stars,j.stars_rev);
    }catch(e){if(!down){down=true;show();}}
    busy=false;timer=setTimeout(check,2000);};
   check();
@@ -353,15 +369,22 @@ def write_atomic(path: Path, text: str) -> None:
     os.replace(tmp, path)
 
 
-def write_page(path: Path, page: str) -> None:
-    """Writes page (from render() or for the index) to path, with its version (a hash of its content
-    apart from the title line, whose server description and generation time change without the content
-    doing so) and generation time filled in, and both to <path>.version.js, which pages opened as files
-    load to check for new versions.
+def stamp_page(page: str, generated: str | None = None) -> tuple:
+    """(page with its version and generation time filled in, version, generation time). The version is a
+    hash of its content apart from the title line, whose server description and generation time change
+    without the content doing so; the generation time is now unless given.
     """
     version = hashlib.sha1(re.sub('<header>.*?</header>', '', page, count=1).encode()).hexdigest()[:16]
-    now = f'{dt.datetime.now():%Y-%m-%d %H:%M:%S}'
-    write_atomic(path, page.replace(VERSION_SLOT, version).replace(GENERATED_SLOT, now))
+    generated = generated or f'{dt.datetime.now():%Y-%m-%d %H:%M:%S}'
+    return page.replace(VERSION_SLOT, version).replace(GENERATED_SLOT, generated), version, generated
+
+
+def write_page(path: Path, page: str) -> None:
+    """Writes page (from render() or for the index) to path, stamped (stamp_page()), and its version and
+    generation time to <path>.version.js, which pages opened as files load to check for new versions.
+    """
+    text, version, now = stamp_page(page)
+    write_atomic(path, text)
     write_atomic(path.with_suffix('.version.js'), f'ccVersion({json.dumps(version)},{json.dumps(now)});\n')
 
 
@@ -379,7 +402,9 @@ CSS = ROOT_CSS + """
 body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 -apple-system,"Segoe UI",Helvetica,Arial,sans-serif;display:flex;flex-direction:column;height:100vh}
 .cols{display:flex;flex:1;min-height:0}
 nav{width:340px;min-width:260px;border-right:1px solid var(--line);overflow:auto;padding:12px;box-sizing:border-box}
-nav input{width:100%;box-sizing:border-box;padding:6px 8px;margin-bottom:8px;border:1px solid var(--line);border-radius:6px;background:var(--soft);color:var(--ink)}
+nav #q{width:100%;box-sizing:border-box;padding:6px 8px;margin-bottom:4px;border:1px solid var(--line);border-radius:6px;background:var(--soft);color:var(--ink)}
+nav label{display:block;font-size:.8em;color:var(--muted);margin-bottom:6px;cursor:pointer} nav label input{vertical-align:-2px;margin:0 4px 0 2px}
+nav a .st{display:none;color:#d4a72c} nav a.starred .st{display:inline}
 nav a{display:block;padding:5px 6px;border-radius:6px;color:var(--ink);text-decoration:none;font-size:.88em;border-bottom:1px solid var(--line)}
 nav a:hover{background:var(--soft)} nav a small{color:var(--muted)} nav a.hidden{display:none} .nonav nav{display:none}
 main{flex:1;display:flex;flex-direction:column;min-width:0;min-height:0}
@@ -397,6 +422,8 @@ main>.meta{flex:none;padding:10px 28px;border-bottom:1px solid var(--line);color
 .answer th{color:var(--muted)} .answer h3,.answer h4,.answer h5,.answer h6{margin:14px 0 4px}
 details{margin-top:6px;color:var(--muted);font-size:.9em} details .ev{border-left:2px dashed var(--line);padding:4px 10px;margin:6px 0;white-space:pre-wrap}
 button.copy{float:right;font-size:.8em;padding:3px 8px;border:1px solid var(--line);border-radius:6px;background:var(--soft);color:var(--ink);cursor:pointer}
+button.star{float:right;margin-left:6px;padding:0 2px;border:none;background:none;color:var(--muted);font-size:1.25em;line-height:1.1;cursor:pointer;font-style:normal}
+.prompt button.star{margin:-3px -6px 0 6px;font-size:1.45em} .starred button.star{color:#d4a72c} button.star.ro{cursor:help}
 .summary-turn .prompt{background:var(--soft);font-style:italic}
 #others{background:var(--soft);border:1px solid var(--line);border-radius:8px;padding:8px 14px;margin-bottom:14px;font-size:.92em}
 #others ul{margin:4px 0;padding-left:22px} #others small{color:var(--muted)}
@@ -427,6 +454,29 @@ async function others(raw){   // no match in this session: list the other sessio
  box.innerHTML=!hits.length?'No matches in this session, or in any other.'
   :'No matches in this session. Matches in other sessions (in their prompts and answers):<ul>'+hits.map(([s,n])=>
    `<li><a href="${esc(ROOT+s.href)}#q=${encodeURIComponent(raw)}">${esc(s.name)}</a> <small>${esc(s.project)} · ${n} match${n>1?'es':''}</small></li>`).join('')+'</ul>';}
+// Stars: the server saves them (POST /_star) and keeps every page in sync (/_alive answers, or <page>.stars.js
+// for pages opened as files, which cannot change them). Each turn's two buttons show the same star.
+const SERVED=location.protocol!=='file:';let stars=new Set(),starsRev=-1,starring=0;
+window.ccStars=(keys,rev)=>{if(starring||rev<starsRev)return;starsRev=rev;stars=new Set(keys);showStars();};
+function showStars(){
+ document.querySelectorAll('.turn').forEach(t=>{const on=stars.has(t.dataset.key);t.classList.toggle('starred',on);
+  t.querySelectorAll('button.star').forEach(b=>b.textContent=on?'\u2605':'\u2606');
+  const a=document.querySelector('nav a[href="#'+t.id+'"]');if(a)a.classList.toggle('starred',on);});
+ sortNav();}
+function sortNav(){   // starred turns first (each group in turn order), unless the box is unticked
+ const first=document.getElementById('starfirst').checked,nav=document.querySelector('nav');
+ try{localStorage.ccStarFirst=first?'':'0';}catch(e){}
+ [...nav.querySelectorAll('a')].sort((a,b)=>(first?b.classList.contains('starred')-a.classList.contains('starred'):0)||a.dataset.i-b.dataset.i)
+  .forEach(a=>nav.append(a));}
+async function star(btn){
+ if(!SERVED)return;
+ const t=btn.closest('.turn'),k=t.dataset.key,on=!stars.has(k);let j=null;
+ starring++;stars[on?'add':'delete'](k);showStars();
+ try{const r=await fetch('/_star',{method:'POST',headers:{'Content-Type':'application/json'},
+  body:JSON.stringify({page:location.pathname,key:k,turn:t.id,on})});if(r.ok)j=await r.json();}catch(e){}
+ starring--;
+ if(j)ccStars(j.stars,j.rev);
+ else{stars[on?'delete':'add'](k);showStars();alert('The server could not save the star.');}}
 function cp(id,btn){const t=document.getElementById(id).dataset.raw;
  const done=()=>{btn.textContent='copied';setTimeout(()=>btn.textContent='copy answer',1200);};
  if(navigator.clipboard&&window.isSecureContext)return navigator.clipboard.writeText(t).then(done);
@@ -437,7 +487,10 @@ function cp(id,btn){const t=document.getElementById(id).dataset.raw;
  let q='';
  if(location.hash.startsWith('#q=')){q=decodeURIComponent(location.hash.slice(3));history.replaceState(null,'',location.pathname+location.search);}
  else try{q=sessionStorage['ccQ'+location.pathname]||'';}catch(e){}
- if(q){document.getElementById('q').value=q;flt();}else navLabel();})();
+ if(q){document.getElementById('q').value=q;flt();}else navLabel();
+ try{document.getElementById('starfirst').checked=localStorage.ccStarFirst!=='0';}catch(e){}
+ document.querySelectorAll('button.star').forEach(b=>{b.title=SERVED?'star this prompt and answer (saved in ~/.claude/conversations/.starred.json)'
+  :'stars can only be changed on pages served by claude-conversation --serve';b.classList.toggle('ro',!SERVED);});})();
 """
 
 # Whether the prompt list is hidden (by its button) is remembered in localStorage, for all session pages,
@@ -471,13 +524,119 @@ def turn_labels(turns) -> list:
     return labels
 
 
-def search_js(turns, session: str) -> str:
-    """The session's prompts and final answers, as a script for the index page's search, which loads it
-    once something is typed (a script, unlike fetch(), can also be loaded by pages opened as files).
+def turn_rows(turns) -> list:
+    """[id on the page, label, prompt ('' for context summaries), final answer, time, key] for each turn.
+    The key (the prompt's uuid in the transcript, else the id) is what stars are saved under.
     """
-    rows = [[f't{i}', label, t['prompt'] if t['kind'] == 'prompt' else '', t['answer']]
+    return [[f't{i}', label, t['prompt'] if t['kind'] == 'prompt' else '', t['answer'], t['time'], t.get('key') or f't{i}']
         for i, (t, label) in enumerate(zip(turns, turn_labels(turns)))]
-    return f'ccSearch({json.dumps({"session": session, "turns": rows})});\n'
+
+
+def search_js(turns, session: str) -> str:
+    """The session's turn_rows(), as a script for searches, loaded once something is typed (a script,
+    unlike fetch(), can also be loaded by pages opened as files). The server reads it to save stars.
+    """
+    return f'ccSearch({json.dumps({"session": session, "turns": turn_rows(turns)})});\n'
+
+
+def search_rows(path: Path) -> list:
+    """The turn_rows() in a search_js() file ([] if it is missing or unreadable)."""
+    try:
+        text = path.read_text()
+        return json.loads(text[text.index('(') + 1:text.rindex(')')])['turns']
+    except (OSError, ValueError, KeyError):
+        return []
+
+
+@contextlib.contextmanager
+def starred_lock():
+    """Held while reading and rewriting STARRED (by the server and by runs regenerating pages)."""
+    OUT_ROOT.mkdir(parents=True, exist_ok=True)
+    with (OUT_ROOT / '.starred.lock').open('w') as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        yield
+
+
+def load_starred() -> dict:
+    """STARRED: {"rev": number of star changes so far, "entries": [one per starred turn, oldest first]}."""
+    try:
+        data = json.loads(STARRED.read_text())
+        return dict(rev=int(data.get('rev', 0)), entries=list(data.get('entries', [])))
+    except (OSError, ValueError, AttributeError):
+        return dict(rev=0, entries=[])
+
+
+def write_stars_js(page: Path, data: dict, session: str) -> tuple:
+    """Writes <page>.stars.js (the keys of the session's starred turns and data's rev, for its page) if
+    that changes it. Returns (keys, rev).
+    """
+    keys = [e['key'] for e in data['entries'] if e.get('session') == session]
+    path, text = page.with_suffix('.stars.js'), f'ccStars({json.dumps(keys)},{data["rev"]});\n'
+    try:
+        same = path.read_text() == text
+    except OSError:
+        same = False
+    if not same:
+        write_atomic(path, text)
+    return keys, data['rev']
+
+
+def read_stars_js(page: Path):
+    """(keys, rev) from <page>.stars.js (None if missing)."""
+    try:
+        text = page.with_suffix('.stars.js').read_text()
+        keys, rev = json.loads('[' + text[text.index('(') + 1:text.rindex(')')] + ']')
+        return keys, rev
+    except (OSError, ValueError):
+        return None
+
+
+def star_entry(page: Path, info: dict, row: list) -> dict:
+    """What STARRED keeps of a starred turn (a turn_rows() row of the session page at page)."""
+    return dict(project=info.get('project', ''), session=page.stem, name=info.get('name', ''),
+        page=page.relative_to(OUT_ROOT).as_posix() if page.is_relative_to(OUT_ROOT) else str(page),
+        turn=row[0], key=row[5], label=row[1], time=row[4], prompt=row[2], answer=row[3])
+
+
+def set_star(page: Path, key: str, turn: str, on: bool):
+    """Stars (on) or unstars the turn with key (or else the id turn) of the session page at page, in
+    STARRED and <page>.stars.js. Returns (keys of the session's starred turns, rev), or None if the
+    turn is not in the page's search_js() file.
+    """
+    rows = search_rows(page.with_suffix('.search.js'))
+    row = next((r for r in rows if len(r) > 5 and r[5] == key), None) or next((r for r in rows if r[0] == turn), None)
+    if row is None:
+        return None
+    if len(row) < 6:   # from before rows had a time and a key
+        row = [*row[:4], '', key]
+    with starred_lock():
+        data = load_starred()
+        data['entries'] = [e for e in data['entries'] if not (e.get('session') == page.stem and e.get('key') == row[5])]
+        if on:
+            data['entries'].append(dict(star_entry(page, session_info(page) or {}, row),
+                starred=f'{dt.datetime.now():%Y-%m-%d %H:%M:%S}'))
+        data['rev'] += 1
+        write_atomic(STARRED, json.dumps(data, indent=1, ensure_ascii=False) + '\n')
+        return write_stars_js(page, data, page.stem)
+
+
+def sync_stars(page: Path, session: str, name: str, rows: list) -> None:
+    """After a run rewrote a session page: updates the prompts and answers (etc.) of the session's entries
+    in STARRED from its turn_rows(), and writes <page>.stars.js.
+    """
+    with starred_lock():
+        data = load_starred()
+        by_key = {r[5]: r for r in rows}
+        changed = False
+        for e in data['entries']:
+            row = by_key.get(e.get('key')) if e.get('session') == session else None
+            if row:
+                new = dict(e, name=name, turn=row[0], label=row[1], time=row[4], prompt=row[2], answer=row[3])
+                if new != e:
+                    e.update(new); changed = True
+        if changed:
+            write_atomic(STARRED, json.dumps(data, indent=1, ensure_ascii=False) + '\n')
+        write_stars_js(page, data, session)
 
 
 def render(turns, name: str, source: Path, project: Path, header: str, root: str) -> str:
@@ -490,10 +649,11 @@ def render(turns, name: str, source: Path, project: Path, header: str, root: str
         first=prompts[0]['time'] if prompts else '', last=prompts[-1]['time'] if prompts else '')
     meta = f'<meta name="claude-conversation" content="{html.escape(json.dumps(info), quote=True)}">'
     nav, body = [], []
+    star = '<button class="star" onclick="star(this)">\u2606</button>'
     for i, (t, label) in enumerate(zip(turns, turn_labels(turns))):
         tid = f't{i}'
         snippet = html.escape(t['prompt'][:90].replace('\n', ' '))
-        nav.append(f'<a href="#{tid}"><b>{label}</b> <small>{t["time"]}</small><br>{snippet}</a>')
+        nav.append(f'<a href="#{tid}" data-i="{i}"><span class="st">\u2605 </span><b>{label}</b> <small>{t["time"]}</small><br>{snippet}</a>')
         raw = html.escape(t['answer'], quote=True)
         inter = ''
         def fold(items, title):
@@ -508,13 +668,14 @@ def render(turns, name: str, source: Path, project: Path, header: str, root: str
             n_ev = sum(1 for k, _ in t['later'] if k == 'event'); n_as = len(t['later']) - n_ev
             inter += fold(t['later'], f'{n_ev} background events after the answer, {n_as} short replies to them')
         prompt_html = html.escape(t['prompt'] if t['kind'] == 'prompt' else t['prompt'][:600] + ' ...')
-        body.append(f'<section class="turn {t["kind"]}-turn" id="{tid}">'
-            f'<div class="prompt"><div class="k">{label} · {t["time"]}</div>{prompt_html}</div>'
-            f'<div class="answer" id="a{i}" data-raw="{raw}"><button class="copy" onclick="cp(\'a{i}\',this)">copy answer</button>'
+        body.append(f'<section class="turn {t["kind"]}-turn" id="{tid}" data-key="{html.escape(t.get("key") or tid)}">'
+            f'<div class="prompt"><div class="k">{star}{label} · {t["time"]}</div>{prompt_html}</div>'
+            f'<div class="answer" id="a{i}" data-raw="{raw}">{star}<button class="copy" onclick="cp(\'a{i}\',this)">copy answer</button>'
             f'{md(t["answer"]) if t["answer"] else "<p><i>(no final text; see the notes below)</i></p>"}</div>{inter}</section>')
     return (f'<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">{stamp_meta()}{meta}<title>{html.escape(title)}</title>'
         f'<style>{CSS}</style>{NAV_STATE_JS}</head><body data-root="{html.escape(root)}" data-session="{html.escape(source.stem)}">'
         f'{header}<div class="cols"><nav><input id="q" placeholder="search prompts and answers" oninput="flt()">'
+        '<label><input type="checkbox" id="starfirst" checked onchange="sortNav()">starred first</label>'
         + '\n'.join(nav) + f'</nav><main><div class="meta"><button id="navbtn" onclick="toggleNav()"></button>{html.escape(title)} · {n} prompts · source {html.escape(str(source))}</div>'
         '<div class="scroll"><div id="others" hidden></div>' + '\n'.join(body) + f'</div></main></div><script>{SEARCH_JS}{JS}{live_js()}</script></body></html>')
 
@@ -565,13 +726,16 @@ def session_info(page: Path):
         return None
 
 
-def write_index(header: str):
-    """Writes OUT_ROOT/index.html linking every session page under OUT_ROOT, grouped by project
-    with the most recently active first, below header. Returns (path, number of sessions, number of
-    projects).
+def index_page(header: str, keep=None, note: str = '') -> tuple:
+    """The index page (for write_page()) linking every session page under OUT_ROOT for which
+    keep(project slug, session id) is true (all by default), grouped by project with the most recently
+    active first, below header, and the list of those sessions (for sessions_js()). note replaces the
+    line's hint on adding sessions. Returns (page, sessions, number of projects).
     """
     by_project = {}
     for page in OUT_ROOT.glob('*/*.html'):
+        if keep and not keep(page.parent.name, page.stem):
+            continue
         info = session_info(page)
         if info:
             info['href'] = str(page.relative_to(OUT_ROOT))
@@ -587,23 +751,62 @@ def write_index(header: str):
         parts.append(f'<h2>{html.escape(project)}</h2><table><tr><th>session</th><th class="n">prompts</th>'
             f'<th>first prompt</th><th>last prompt</th><th>id</th></tr>{rows}</table>')
     n = sum(len(v) for v in by_project.values())
-    out = OUT_ROOT / 'index.html'
-    write_page(out, f'<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">{stamp_meta()}<title>Claude Code sessions</title>'
+    note = html.escape(note or 'run claude-conversation (--all) in a project to add or refresh its sessions')
+    page = (f'<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">{stamp_meta()}<title>Claude Code sessions</title>'
         f'<style>{INDEX_CSS}</style></head><body>{header}<div class="meta">{plural(n, "rendered session")} in '
-        f'{plural(len(by_project), "project")} · run claude-conversation (--all) in a project to add or refresh its sessions</div>'
+        f'{plural(len(by_project), "project")} · {note}</div>'
         f'<input id="q" placeholder="search all prompts and answers (and session names)" oninput="flt()">' + '\n'.join(parts)
         + f'<script>{SEARCH_JS}{INDEX_JS}{live_js()}</script></body></html>')
-    # the session list for session pages' searches of the other sessions
     sessions = [{k: i[k] for k in ('session', 'name', 'project', 'href', 'search')}
         for _, infos in sorted(by_project.items(), key=lambda kv: max(i['last'] for i in kv[1]), reverse=True)
         for i in sorted(infos, key=lambda i: i['last'], reverse=True)]
-    write_atomic(OUT_ROOT / 'sessions.js', f'ccSessions({json.dumps(sessions)});\n')
-    return out, n, len(by_project)
+    return page, sessions, len(by_project)
+
+
+def sessions_js(sessions: list) -> str:
+    """The session list as a script, for session pages' searches of the other sessions."""
+    return f'ccSessions({json.dumps(sessions)});\n'
+
+
+def write_index(header: str):
+    """Writes OUT_ROOT/index.html (index_page() of every session) and OUT_ROOT/sessions.js. Returns
+    (path, number of sessions, number of projects).
+    """
+    page, sessions, n_projects = index_page(header)
+    out = OUT_ROOT / 'index.html'
+    write_page(out, page)
+    write_atomic(OUT_ROOT / 'sessions.js', sessions_js(sessions))
+    return out, len(sessions), n_projects
+
+
+def in_scope(scope: list, path: str) -> bool:
+    """Whether the server shows the file at URL path (unquoted) under OUT_ROOT: one of a session's files
+    (<project slug>/<session id>.*) whose project or session is in scope (a list of dicts with the
+    project's directory and slug, and a session id, or None for all its sessions).
+    """
+    parts = path.strip('/').split('/')
+    if len(parts) != 2 or not parts[1] or parts[1].startswith('.'):
+        return False
+    slug, session = parts[0], parts[1].split('.')[0]
+    return any(x['slug'] == slug and x['session'] in (None, session) for x in scope)
+
+
+def scope_note(scope: list) -> str:
+    """What the server shows, for its index page."""
+    by_project = {}
+    for x in scope:
+        by_project.setdefault(x['project'], set()).add(x['session'])
+    parts = [p if None in ss else f'{p} ({"session" if len(ss) == 1 else "sessions"} {", ".join(sorted(x[:8] for x in ss))})'
+        for p, ss in by_project.items()]
+    return 'this server only shows ' + ('; '.join(parts) or 'nothing') + ' (as asked by the --serve runs using it)'
 
 
 class QuietHandler(http.server.SimpleHTTPRequestHandler):
-    """Serves OUT_ROOT, plus /_alive, which open pages ask whether they have been regenerated (and
-    which tells the server they are open), and /_status (the open tabs, for the command line).
+    """Serves the files of the sessions in the server's scope under OUT_ROOT, and an index page and
+    sessions.js listing those only. Also /_alive, which open pages ask whether they have been
+    regenerated and for their stars (which tells the server they are open), /_status (the open tabs
+    etc., for the command line), and, by POST, /_star (stars or unstars a turn) and /_scope (adds a
+    later run's sessions to those shown).
     """
     server_version = 'claude-conversation'   # lets server_status() recognize its own server
 
@@ -614,32 +817,103 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
         self.send_header('Cache-Control', 'no-cache')   # always revalidate: pages must not come from a stale cache
         super().end_headers()
 
+    def do_HEAD(self):
+        self.get(head=True)
+
     def do_GET(self):
+        self.get(head=False)
+
+    def get(self, head: bool) -> None:
         srv = self.server
         url = urllib.parse.urlsplit(self.path)
-        if url.path != '/_status':   # the command line asking does not keep the server up
+        path = urllib.parse.unquote(url.path)
+        if path != '/_status':   # the command line asking does not keep the server up
             srv.last_request = time.monotonic()
-        if url.path == '/_alive':
+        if path == '/_alive':
             q = dict(urllib.parse.parse_qsl(url.query))
-            page = Path(self.translate_path(q.get('page', '/')))
-            if page.is_dir():
-                page /= 'index.html'
+            page = urllib.parse.unquote(q.get('page', '/'))
             with srv.lock:
-                srv.tabs[q.get('tab', '')] = dict(page=q.get('page', ''), client=self.client_address[0],
+                srv.tabs[q.get('tab', '')] = dict(page=page, client=self.client_address[0],
                     seen=time.monotonic(), version=q.get('v', ''))
+            if page in ('/', '/index.html'):
+                index = scoped_index(srv)
+                return self.send_json({'version': index['version'], 'generated': index['generated'], 'restart': srv.restart})
+            if not in_scope(srv.scope, page):
+                return self.send_error(404)
+            page = Path(self.translate_path(page))
             version, generated = page_stamp(page)
-            return self.send_json({'version': version, 'generated': generated, 'restart': srv.restart})
-        if url.path == '/_status':
-            return self.send_json({'tabs': open_tabs(srv), 'watch': watch_running()})
-        super().do_GET()
+            answer = {'version': version, 'generated': generated, 'restart': srv.restart}
+            if stars := read_stars_js(page):
+                answer.update(stars=stars[0], stars_rev=stars[1])
+            return self.send_json(answer)
+        if path == '/_status':
+            return self.send_json({'tabs': open_tabs(srv), 'watch': watch_running(), 'api': SERVER_API, 'scope': srv.scope})
+        if path in ('/', '/index.html'):
+            return self.send_body(scoped_index(srv)['page'], 'text/html; charset=utf-8', head)
+        if path == '/sessions.js':
+            return self.send_body(scoped_index(srv)['sessions'], 'text/javascript; charset=utf-8', head)
+        if not in_scope(srv.scope, path):
+            return self.send_error(404)
+        super().do_HEAD() if head else super().do_GET()
+
+    def do_POST(self):
+        srv = self.server
+        srv.last_request = time.monotonic()
+        try:
+            body = json.loads(self.rfile.read(int(self.headers.get('Content-Length') or 0)) or b'null')
+        except ValueError:
+            return self.send_error(400)
+        path = urllib.parse.urlsplit(self.path).path
+        if path == '/_star' and isinstance(body, dict):
+            page = urllib.parse.unquote(str(body.get('page', '')))
+            if not (page.endswith('.html') and in_scope(srv.scope, page)):
+                return self.send_error(404)
+            result = set_star(Path(self.translate_path(page)), str(body.get('key', '')), str(body.get('turn', '')), bool(body.get('on')))
+            if result is None:
+                return self.send_error(404)
+            return self.send_json({'stars': result[0], 'rev': result[1]})
+        if path == '/_scope' and isinstance(body, list):
+            with srv.lock:
+                for x in body:
+                    x = {k: x.get(k) for k in ('project', 'slug', 'session')}
+                    if x not in srv.scope:
+                        srv.scope.append(x)
+            return self.send_json({'scope': srv.scope})
+        self.send_error(404)
 
     def send_json(self, obj) -> None:
-        body = json.dumps(obj).encode()
+        self.send_body(json.dumps(obj).encode(), 'application/json', False)
+
+    def send_body(self, body: bytes, ctype: str, head: bool) -> None:
         self.send_response(200)
-        self.send_header('Content-Type', 'application/json')
+        self.send_header('Content-Type', ctype)
         self.send_header('Content-Length', str(len(body)))
         self.end_headers()
-        self.wfile.write(body)
+        if not head:
+            self.wfile.write(body)
+
+
+def scoped_index(srv) -> dict:
+    """The index page (with its version and generation time) and sessions.js the server sends: those of
+    the sessions in its scope. Rebuilt when index.html (rewritten by every run) or the scope changes.
+    """
+    index = OUT_ROOT / 'index.html'
+    try:
+        mtime = index.stat().st_mtime_ns
+    except OSError:
+        mtime = None
+    with srv.lock:
+        scope = list(srv.scope)
+        key = (mtime, json.dumps(scope))
+        if srv.index_cache and srv.index_cache['key'] == key:
+            return srv.index_cache
+    page, sessions, _ = index_page(header_html(server_description(srv.server_address[1], os.getpid())),
+        lambda slug, session: in_scope(scope, f'/{slug}/{session}.html'), scope_note(scope))
+    text, version, generated = stamp_page(page, page_stamp(index)[1])
+    cache = dict(key=key, page=text.encode(), version=version, generated=generated, sessions=sessions_js(sessions).encode())
+    with srv.lock:
+        srv.index_cache = cache
+    return cache
 
 
 def open_tabs(srv) -> list:
@@ -688,8 +962,10 @@ def run_server(port: int) -> None:
     """
     handler = functools.partial(QuietHandler, directory=str(OUT_ROOT))
     srv = http.server.ThreadingHTTPServer(('', port), handler)
-    srv.tabs, srv.lock, srv.last_request = {}, threading.Lock(), time.monotonic()
-    srv.restart = os.environ.get('CLAUDE_CONVERSATION_RESTART', '')   # set by ensure_server()
+    srv.tabs, srv.lock, srv.last_request, srv.index_cache = {}, threading.Lock(), time.monotonic(), None
+    # both set by ensure_server()
+    srv.restart = os.environ.get('CLAUDE_CONVERSATION_RESTART', '')
+    srv.scope = json.loads(os.environ.get('CLAUDE_CONVERSATION_SCOPE') or '[]')
     threading.Thread(target=stop_when_idle, args=(srv,), daemon=True).start()
     srv.serve_forever()
     pidfile = server_files(port)[0]
@@ -730,11 +1006,25 @@ def restart_command() -> str:
     return f'cd {shlex.quote(os.getcwd())} && {shlex.join([prog, *sys.argv[1:]])}'
 
 
-def ensure_server(port: int) -> str:
-    """Starts the background server on port unless it is running. Returns 'started' or 'running'."""
+def ensure_server(port: int, scope: list) -> str:
+    """Starts the background server on port, to show the sessions in scope (see in_scope()), unless it is
+    running, in which case it adds them to those it shows. A running server from an older version of this
+    script (one without what pages now ask of it) is replaced. Returns 'started' or 'running'.
+    """
     status = server_status(port)
     if status == 'ours':
-        return 'running'
+        if (server_state(port) or {}).get('api') == SERVER_API:
+            try:
+                post_json(port, '/_scope', scope)
+            except OSError as e:
+                sys.exit(f'could not add the sessions of this run to those the server on port {port} shows: {e}')
+            return 'running'
+        stopped = stop_server(port)
+        if server_status(port) != 'none':
+            sys.exit(f'the server on port {port} is from an older version of this script, and could not be replaced: {stopped}')
+        print(f'the server on port {port} was from an older version of this script: {stopped}, starting the current one',
+            file=sys.stderr)
+        status = 'none'
     if status == 'other':
         sys.exit(f'port {port} is in use by another program (pick another with --port)')
     pidfile, logfile = server_files(port)
@@ -744,7 +1034,7 @@ def ensure_server(port: int) -> str:
     with logfile.open('w') as log:
         proc = subprocess.Popen([sys.executable, os.path.abspath(__file__), '--_server', str(port)],
             stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True,
-            env=dict(os.environ, CLAUDE_CONVERSATION_RESTART=restart_command()))
+            env=dict(os.environ, CLAUDE_CONVERSATION_RESTART=restart_command(), CLAUDE_CONVERSATION_SCOPE=json.dumps(scope)))
     for _ in range(50):
         if server_status(port) == 'ours':
             pidfile.write_text(f'{proc.pid}\n')
@@ -786,39 +1076,65 @@ def stop_command(port: int) -> str:
     return 'claude-conversation --stop-server' + ('' if port == SERVER_PORT else f' --port {port}')
 
 
-def server_tabs(port: int) -> list | None:
-    """The tabs that have the server's pages open (None if it does not say)."""
+def server_state(port: int) -> dict | None:
+    """The server's /_status answer (None if it does not answer)."""
     try:
         with urllib.request.urlopen(f'http://127.0.0.1:{port}/_status', timeout=2) as r:
-            return json.load(r)['tabs']
-    except (OSError, ValueError, KeyError):
+            return json.load(r)
+    except (OSError, ValueError):
         return None
 
 
-def at_exit_with_server(port: int, started: bool, watch: bool) -> None:
-    """atexit hook of --serve runs. When a --watch run in a terminal ends, asks whether to stop the
-    server: anything but no stops it, including another Ctrl+C. Says how to stop it whenever a --watch
-    run leaves it running, or when a run in a terminal has just started it.
-    """
-    if server_status(port) != 'ours':
-        return
-    pid = server_pid(port)
-    idle = f'it stops itself after {IDLE_TIMEOUT // 60} min with no page open and no --watch run'
-    running = (f'the server on port {port} (pid {pid or "unknown"}) is still running ({idle}); '
+def server_tabs(port: int) -> list | None:
+    """The tabs that have the server's pages open (None if it does not say)."""
+    return (server_state(port) or {}).get('tabs')
+
+
+def post_json(port: int, path: str, obj) -> None:
+    req = urllib.request.Request(f'http://127.0.0.1:{port}{path}', json.dumps(obj).encode(),
+        {'Content-Type': 'application/json'})
+    with urllib.request.urlopen(req, timeout=2):
+        pass
+
+
+IDLE_NOTE = f'it stops itself after {IDLE_TIMEOUT // 60} min with no page open and no --watch run'
+
+
+def still_running(port: int) -> str:
+    return (f'the server on port {port} (pid {server_pid(port) or "unknown"}) is still running ({IDLE_NOTE}); '
         f'stop it now with: {stop_command(port)}')
-    interactive = sys.stdin.isatty() and sys.stderr.isatty()
-    if not (watch and interactive):
-        if watch:
-            print(running, file=sys.stderr)
-        elif started and interactive:
-            print(f'started the server in the background (pid {pid}; {idle}); stop it now with: {stop_command(port)}',
-                file=sys.stderr)
+
+
+def at_exit_with_server(port: int, started: bool, watch: bool, asked: list) -> None:
+    """atexit hook of --serve runs, unless the run asked what to do at Ctrl+C (asked is not empty): says
+    how to stop the server when a --watch run leaves it running, or when a run in a terminal has just
+    started it.
+    """
+    if asked or server_status(port) != 'ours':
         return
+    if watch:
+        print(still_running(port), file=sys.stderr)
+    elif started and sys.stdin.isatty() and sys.stderr.isatty():
+        print(f'started the server in the background (pid {server_pid(port)}; {IDLE_NOTE}); stop it now with: '
+            f'{stop_command(port)}', file=sys.stderr)
+
+
+def ask_at_ctrl_c(port: int) -> bool:
+    """After Ctrl+C in a --watch --serve run in a terminal, asks whether to stop the server and exit (the
+    default: anything but "n" or "b", including another Ctrl+C), carry on watching ("n": the question is
+    then cleared from the terminal), or exit leaving the server running ("b"). Returns whether to carry on.
+    """
     how = ''
     try:
+        if server_status(port) != 'ours':
+            print(file=sys.stderr)
+            return False
         tabs = server_tabs(port)
         tabs = '' if tabs is None else f', {plural(len(tabs), "tab")} open'
-        print(f'stop the server on port {port} (pid {pid or "unknown"}{tabs})? [Y/n] ', end='', file=sys.stderr, flush=True)
+        # over the ^C the terminal echoed
+        question = (f'stop the server (port {port}, pid {server_pid(port) or "unknown"}{tabs}) and exit? '
+            'Y / n: keep watching / b: leave it running in the background ')
+        print('\r\x1b[K' + question, end='', file=sys.stderr, flush=True)
         answer = input()
     except KeyboardInterrupt:
         answer, how = '', 'Ctrl+C at the prompt: '
@@ -826,12 +1142,18 @@ def at_exit_with_server(port: int, started: bool, watch: bool) -> None:
     except EOFError:
         answer = ''
         print(file=sys.stderr)
+    choice = answer.strip().lower()
+    if choice in ('n', 'no'):   # clear the question and the answer (as wrapped by the terminal)
+        rows = -(-len(question + answer) // max(shutil.get_terminal_size().columns, 1))
+        print(f'\x1b[{max(rows, 1)}A\r\x1b[J', end='', file=sys.stderr, flush=True)
+        return True
     signal.signal(signal.SIGINT, signal.SIG_IGN)   # answered: let the rest finish
-    if answer.strip().lower() not in ('n', 'no'):
+    if choice not in ('b', 'background'):
         print(how + stop_server(port), file=sys.stderr)
     # whatever happened above (left running, or stopping it failed), say how to stop it if it is up
     if server_status(port) == 'ours':
-        print(running, file=sys.stderr)
+        print(still_running(port), file=sys.stderr)
+    return False
 
 
 def server_base(port: int) -> str:
@@ -841,9 +1163,9 @@ def server_base(port: int) -> str:
     return f'http://{f"[{host}]" if ":" in host else host}:{port}'
 
 
-def server_description(port: int) -> str:
-    """Where the server on port is and its pid, for the pages' title line."""
-    pid = server_pid(port)
+def server_description(port: int, pid: int | None = None) -> str:
+    """Where the server on port is and its pid (from its pid file unless given), for the pages' title line."""
+    pid = pid or server_pid(port)
     return (f'served from {server_base(port).removeprefix("http://")} on {socket.gethostname()} · '
         f'server pid {pid if pid else "unknown"}')
 
@@ -875,7 +1197,8 @@ def main() -> None:
     ap.add_argument('--open', action='store_true', help='open the page in the browser (xdg-open)')
     ap.add_argument('--watch', type=int, default=0, metavar='SEC', help='regenerate every SEC seconds until Ctrl+C')
     ap.add_argument('--serve', action='store_true',
-        help='start a background HTTP server for the pages (unless running) and print http:// URLs')
+        help='start a background HTTP server (unless running) for the pages of this project (or only of the sessions '
+        'given with --session / --jsonl), and print http:// URLs')
     ap.add_argument('--port', type=int, default=SERVER_PORT, help=f'port for --serve (default: {SERVER_PORT})')
     ap.add_argument('--stop-server', action='store_true', help='stop the --serve server on --port and exit')
     ap.add_argument('--_server', type=int, help=argparse.SUPPRESS)
@@ -903,16 +1226,20 @@ def main() -> None:
             sys.exit('no matching session')
     outs = [args.out if (args.out and len(files) == 1) else OUT_ROOT / slug / f'{f.stem}.html' for f in files]
     base = server = None
+    asked = []   # set once Ctrl+C in a --watch run asked what to do with the server, and the run is ending
     if args.serve:
-        status = ensure_server(args.port)
-        atexit.register(at_exit_with_server, args.port, started=status == 'started', watch=bool(args.watch))
+        # what the server shows: this project's sessions, or only the ones asked for
+        scope = [dict(project=str(args.project.resolve()), slug=slug, session=f.stem if (args.session or args.jsonl) else None)
+            for f in (files if (args.session or args.jsonl) else files[:1])]
+        status = ensure_server(args.port, scope)
+        atexit.register(at_exit_with_server, args.port, started=status == 'started', watch=bool(args.watch), asked=asked)
         base = server_base(args.port)
         server = server_description(args.port)
         if args.verbose:
             print(f'server {"started" if status == "started" else "already running"}: {base}/', flush=True)
     first_pass = True
-    try:
-        while True:
+    while True:
+        try:
             for f, out in zip(files, outs):
                 turns, name = build_turns(f)
                 prompts = [t for t in turns if t['kind'] == 'prompt']
@@ -924,6 +1251,7 @@ def main() -> None:
                 write_atomic(out.with_suffix('.search.js'), search_js(turns, f.stem))
                 write_page(out, render(turns, name, f, args.project.resolve(), header_html(server, index_href),
                     index_href.removesuffix('index.html')))
+                sync_stars(out, f.stem, name, turn_rows(turns))
                 if args.verbose:
                     print(f'{url_for(out, base) if base else out}  "{name}"  ({plural(len(prompts), "prompt")})', flush=True)
             index, n_sessions, n_projects = write_index(header_html(server))
@@ -939,9 +1267,14 @@ def main() -> None:
             if not args.watch:
                 break
             time.sleep(args.watch)
-    except KeyboardInterrupt:   # the way --watch ends: no traceback (and --serve's atexit hook runs)
-        print(file=sys.stderr)
-        sys.exit(130)
+        except KeyboardInterrupt:   # the way --watch ends: no traceback (and --serve's atexit hook runs)
+            if args.serve and args.watch and sys.stdin.isatty() and sys.stderr.isatty():
+                if ask_at_ctrl_c(args.port):
+                    continue
+                asked.append(True)
+            else:
+                print(file=sys.stderr)
+            sys.exit(130)
 
 
 if __name__ == '__main__':
