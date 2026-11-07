@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+
+# TODO what unpaper args to actually wipe out black edge on right?
+# tried a few -W / --[pre|post]-[wipe|border] right did not work
+# ocrmypdf -i -r -d --remove-background --remove-vectors --threshold  --unpaper-args '--pre-wipe right' --tesseract-pagesegmode=1 --tesseract-oem=1 intro123.pdf o.pdf && pdf2txt o.pdf
+
+# TODO convert all to one command (w/o intermediate text files) after debugging)
+pdf2txt $1 | sed 's/\s$//g' > t1
+cat t1 | sed -z -E 's/([^\n]+\n)\n/\1/g' > t2
+# TODO only filter page numbers here, not section numbers by themselves?
+# (if line is all upper case and numbers / period, can filter that too)
+#cat t2 | sed -z 's/\n[[:digit:]][\.[:digit:]]*\n/\n/g' > t3
+# TODO why does this not match lines like 'CHAPTER  1.  GENERAL  INTRODUCTION'
+# (and doesn't match lone digits w/ + intead of * why?)
+cat t2 | sed -z -E 's/\n[[:digit:][:upper:]\. ]*\n/\n/g' > t3
+cat t3 | sed -z -E 's/([[:lower:]])\n([[:lower:]])/\1 \2/g' > t4
+# TODO also, this this not work?
+#cat t4 | sed -z -E 's/\n[[:digit:][:upper:]\.\s]+\n/\n/g' > t5
+# TODO replace any double spaces with one
+cat t4 | tee >(xclip -sel clipboard)

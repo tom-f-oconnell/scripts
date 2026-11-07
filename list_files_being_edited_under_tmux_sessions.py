@@ -122,7 +122,7 @@ def main():
             )
 
         # to shorten paths with '/home/<user>/' in them, replacing that part with '~/'
-        line_without_pane_pid = re.sub(f'\s{home_str}', ' ~/', line_without_pane_pid)
+        line_without_pane_pid = re.sub(f'\\s{home_str}', ' ~/', line_without_pane_pid)
 
         # TODO change output so each field is justified (padding between as needed)?
         # (would prob be a bit complicated...). can i configure list-sessions to do that
