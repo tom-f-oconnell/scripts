@@ -37,7 +37,7 @@ apt update
 # package?)
 
 # All remaining apt packages are collected in this array, then installed with one
-# `apt install` (no -y, so it shows what it will do and asks once) below.
+# `apt install -y` below.
 PACKAGES=()
 
 # Replaces keepass2 / keepassx
@@ -202,6 +202,6 @@ PACKAGES+=(fonts-inter)
 # for Dropbox
 PACKAGES+=(python3-gpg)
 
-apt install "${PACKAGES[@]}"
+apt install -y "${PACKAGES[@]}"
 # TODO TODO figure out a way to do this all as `sudo -u $USER`
 #cd ~ && wget -O - "https://www.dropbox.com/download?plat=lnx.x86_64" | tar xzf -
