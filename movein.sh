@@ -34,12 +34,6 @@ fi
 # - ppa:git-core/ppa: was for a git recent enough for git-filter-repo. 26.04 has 2.53.
 # - ppa:apandada1/brightness-controller: has no packages for 26.04
 
-# TODO TODO add ppa for unity [unity7 (suffix/prefix?) was it?] + install
-# (i'm not sure why i thought this was from a ppa. i just installed it via:
-# `sudo apt install ubuntu-unity-desktop` this time, in fresh 18.04.
-# was there something else i got from a ppa like this?)
-# keep indicator-multiload with unity cause it won't work with default gnome.
-
 # TODO TODO did i end up getting latest git from a ppa (to get version
 # sufficient for 3rd party filter-repo)? if so, add that
 
@@ -48,23 +42,10 @@ fi
 
 apt update
 
-# No longer used: on the default GNOME desktop now. (still installable in 26.04)
-# TODO how to automatically select lightdm (this) as default in interactive TUI that
-# pops up?
-#apt install ubuntu-unity-desktop
-
 # TODO maybe install dbus-x11 to get vim-gtk to work w/ wsl?
 # https://vi.stackexchange.com/questions/20107
 # (or is that literally just for the GUI version that maybe also comes w/ that
 # package?)
-
-# No longer supported: not in 26.04 (and its PPA has nothing for 26.04 either). GNOME's
-# own quick settings have a brightness slider.
-#apt install brightness-indicator
-
-# No longer used: only works with unity, not the default gnome in >=18.04.
-# (still installable in 26.04)
-#apt install indicator-multiload
 
 # All remaining apt packages are collected in this array, then installed with one
 # `apt install` (no -y, so it shows what it will do and asks once) below.
@@ -157,13 +138,6 @@ PACKAGES+=(bash-completion)
 # vlc?
 
 sudo -u $USER mkdir -p ~/src
-
-# No longer used: not developing ROS anymore.
-# No need to make this catkin dir on WSL, as no plans to develop ROS there.
-# https://stackoverflow.com/questions/38859145
-#if ! grep -q Microsoft /proc/version; then
-#    sudo -u $USER mkdir -p ~/catkin/src
-#fi
 
 # TODO install firefox w/ settings (vim keybinds, etc)
 # TODO how to configure tridactyl
