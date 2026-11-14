@@ -88,6 +88,9 @@ PACKAGES+=(openssh-server)
 # NOTE: since 23.04, pip refuses to install outside a venv (PEP 668), `--user` included.
 PACKAGES+=(python3-pip python3-venv python3-dev python3-tk)
 
+# To build YouCompleteMe (dotfiles/install_vim_extensions.sh), along w/ python3-dev above
+PACKAGES+=(build-essential cmake)
+
 # No longer supported: python3.8 is not in 26.04.
 # The unversioned packages above are the system python (3.14) equivalents.
 #apt install -y python3.8 python3.8-dev python3.8-venv python3.8-tk
