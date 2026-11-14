@@ -21,21 +21,18 @@ else
 fi
 # TODO way to make it just prompt for password if run as non-root?
 
-# for keepassx
+# Last checked against Ubuntu 26.04 (2026-11-13): every package installed below has an
+# install candidate there. Nothing below needs a PPA anymore, so none are added.
+
 # TODO put some stuff behind option for my personal vs work computers?
-# TODO maybe consider replacing w/ ubuntuhandbook1/keepass2 (if compatible /
-# migration available), or see if other ppas are more active / more recommended
-#add-apt-repository -y ppa:eugenesan/ppa
-#
-# Should work in 20.04 at least:
-add-apt-repository -y ppa:ubuntuhandbook1/keepass2
 
-add-apt-repository -y ppa:deadsnakes/ppa
-
-# for more recent git than default in distro
-apt-add-repository -y ppa:git-core/ppa
-
-add-apt-repository -y ppa:apandada1/brightness-controller
+# No longer supported / needed as of 26.04 (all PPAs this script used to add):
+# - ppa:ubuntuhandbook1/keepass2 (and ppa:eugenesan/ppa before it, for keepassx):
+#   keepassxc, in the main repos, replaces both (opens the same .kdbx files)
+# - ppa:deadsnakes/ppa: was for python3.8, which it no longer builds for 26.04. The
+#   system python3 is 3.14. For other versions, `uv python install <version>` (or conda).
+# - ppa:git-core/ppa: was for a git recent enough for git-filter-repo. 26.04 has 2.53.
+# - ppa:apandada1/brightness-controller: has no packages for 26.04
 
 # TODO TODO add ppa for unity [unity7 (suffix/prefix?) was it?] + install
 # (i'm not sure why i thought this was from a ppa. i just installed it via:
@@ -51,24 +48,30 @@ add-apt-repository -y ppa:apandada1/brightness-controller
 
 apt update
 
-# TODO might need to put this behind a test for 20.04 / sufficient version to have this
-# available. not sure it's available in 18.04 (no need in <=16.04...) is it?
+# No longer used: on the default GNOME desktop now. (still installable in 26.04)
 # TODO how to automatically select lightdm (this) as default in interactive TUI that
 # pops up?
-apt install -y ubuntu-unity-desktop
+#apt install ubuntu-unity-desktop
 
 # TODO maybe install dbus-x11 to get vim-gtk to work w/ wsl?
 # https://vi.stackexchange.com/questions/20107
 # (or is that literally just for the GUI version that maybe also comes w/ that
 # package?)
 
-# TODO still want?
-apt install -y brightness-indicator
-# Should work in 20.04 at least:
-apt install -y keepass2
+# No longer supported: not in 26.04 (and its PPA has nothing for 26.04 either). GNOME's
+# own quick settings have a brightness slider.
+#apt install brightness-indicator
 
-# NOTE: indicator-multiload will only work with unity, not the default gnome in >=18.04
-apt install -y indicator-multiload
+# No longer used: only works with unity, not the default gnome in >=18.04.
+# (still installable in 26.04)
+#apt install indicator-multiload
+
+# All remaining apt packages are collected in this array, then installed with one
+# `apt install` (no -y, so it shows what it will do and asks once) below.
+PACKAGES=()
+
+# Replaces keepass2 / keepassx
+PACKAGES+=(keepassxc)
 
 # TODO check whether the vim from this is also compiled w/ clipboard support.
 # the `vim-gtk` i used previously was.
@@ -85,30 +88,39 @@ apt install -y indicator-multiload
 # then just changing Vundle to point to my github account?) an
 # older version of YCM and using that one.
 #apt install -y vim vim-youcompleteme
-apt install -y vim-gtk
+# vim-gtk was renamed vim-gtk3 (which has clipboard and python3 support)
+PACKAGES+=(vim-gtk3)
 
 # TODO install wmctrl?
 
 # TODO `direnv allow` on home directory? (maybe in dotbot stuff, if it needs to copy /
 # link some files there first?)
 
-apt install -y curl git xclip gparted nfs-common xdotool wmctrl direnv chrony
-apt install -y tree autofs
+# NOTE: xclip, xdotool and wmctrl only work in X11 sessions (and XWayland windows).
+# wl-clipboard (wl-copy / wl-paste) is the xclip equivalent for Wayland sessions.
+PACKAGES+=(curl git xclip wl-clipboard gparted nfs-common xdotool wmctrl direnv chrony)
+PACKAGES+=(tree autofs)
+
+# jq: for dotfiles (Claude Code status line, and the git filter on claude_settings.json).
+# gh: GitHub CLI, replaces the `hub` snap this script used to install.
+# libnotify-bin: notify-send
+PACKAGES+=(jq gh libnotify-bin)
 
 # Mainly just for `aptitude why <x>` (says which package triggered installation via
 # dependency / whether package was manually installed, though the former doesn't
 # recurse to the manually installed packages [/ seem to have options to]).
-apt install -y aptitude
+PACKAGES+=(aptitude)
 
 # TODO maybe warn about / don't install the ssh server by default?
 # (or configure to disable it?)
-apt install -y openssh-server
+PACKAGES+=(openssh-server)
 
-apt install -y python3-pip python3-venv
+# NOTE: since 23.04, pip refuses to install outside a venv (PEP 668), `--user` included.
+PACKAGES+=(python3-pip python3-venv python3-dev python3-tk)
 
-# TODO still necessary / meaningful for 20.04? is python3.8 the system python there?
-# All from deadsnakes PPA
-apt install -y python3.8 python3.8-dev python3.8-venv python3.8-tk
+# No longer supported: python3.8 is not in 26.04, nor in the deadsnakes PPA for it.
+# The unversioned packages above are the system python (3.14) equivalents.
+#apt install -y python3.8 python3.8-dev python3.8-venv python3.8-tk
 
 # TODO TODO at least install conda behind prompt (maybe in separate script that gets
 # called here, but skipped if non-interactive, and include instructions on how to
@@ -116,15 +128,16 @@ apt install -y python3.8 python3.8-dev python3.8-venv python3.8-tk
 # TODO add automation/instructions for installing mamba (via conda) after
 # https://mamba.readthedocs.io/en/latest/installation.html
 
-apt install -y tmux smartmontools iotop htop
+PACKAGES+=(tmux smartmontools iotop htop)
 
 # TODO remove if this is installed in stock ubuntu >=18.04 by default.
 # For https://github.com/cykerway/complete-alias
-apt install -y bash-completion
+PACKAGES+=(bash-completion)
 
-# golang is 1.13.8 in 20.04 as of 2022-07-29, which is > the min 1.14 required by
-# omrijarel/deej (as of the same time).
-apt install -y libgtk-3-dev libappindicator3-dev libwebkit2gtk-4.0-dev golang
+# For building omrijarel/deej. Not installed by default anymore (none of these were on
+# atlas as of 2026-11). golang is 1.26 in 26.04. libwebkit2gtk-4.0-dev is not in 26.04:
+# 4.1 is its replacement, but deej may need changes to build against it.
+#PACKAGES+=(libgtk-3-dev libappindicator3-dev libwebkit2gtk-4.1-dev golang)
 
 # TODO install black python formatter (snap seemed to be best / only option for
 # 16.04, but is that also the case for 18.04+?)
@@ -145,11 +158,12 @@ apt install -y libgtk-3-dev libappindicator3-dev libwebkit2gtk-4.0-dev golang
 
 sudo -u $USER mkdir -p ~/src
 
+# No longer used: not developing ROS anymore.
 # No need to make this catkin dir on WSL, as no plans to develop ROS there.
 # https://stackoverflow.com/questions/38859145
-if ! grep -q Microsoft /proc/version; then
-    sudo -u $USER mkdir -p ~/catkin/src
-fi
+#if ! grep -q Microsoft /proc/version; then
+#    sudo -u $USER mkdir -p ~/catkin/src
+#fi
 
 # TODO install firefox w/ settings (vim keybinds, etc)
 # TODO how to configure tridactyl
@@ -166,7 +180,7 @@ fi
 # whatever algorithm rather than rsa) (+ probably refactor check for the key into
 # mk_key.sh)
 # TODO get path to this script first? (to not use relative)
-if [ ! -e ~/.ssh/id_rsa.pub ]; then
+if ! ls ~/.ssh/id_*.pub > /dev/null 2>&1; then
     # This script must be run as "sudo" (which all calls in this script are
     # by default), though it currently doesn't check that itself.
     ${SCRIPTPATH}/mk_key.sh
@@ -176,11 +190,12 @@ fi
 
 # TODO install inkscape via snap (from default channel)
 
-# TODO need something like a -y flag here?
-snap install hub --classic
+# No longer used: `gh` (installed via apt above) replaces `hub`.
+#snap install hub --classic
 
-# Seems to install as if --user by default on 20.04
-sudo -u $USER pip install grip
+# grip (GitHub README preview) is packaged in 26.04. `pip install grip` outside a venv no
+# longer works (PEP 668).
+PACKAGES+=(grip)
 
 # not sure whether maven already include something that would make default-jdk
 # irrelevant
@@ -212,6 +227,8 @@ sudo -u $USER pip install grip
 # from their website...
 
 # for Dropbox
-apt install -y python3-gpg
+PACKAGES+=(python3-gpg)
+
+apt install "${PACKAGES[@]}"
 # TODO TODO figure out a way to do this all as `sudo -u $USER`
 #cd ~ && wget -O - "https://www.dropbox.com/download?plat=lnx.x86_64" | tar xzf -
