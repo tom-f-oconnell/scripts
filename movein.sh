@@ -189,6 +189,13 @@ PACKAGES+=(grip)
 # TODO automate vagrant install? it seems it might be best to download installer
 # from their website...
 
+# Sphinx (sphinx-build etc) and isort. Were pip --user installs, which broke when the
+# python they were installed for went away.
+PACKAGES+=(python3-sphinx isort)
+
+# The Inter font, which ~/src/portfolio needs for its captures to look the same
+PACKAGES+=(fonts-inter)
+
 # for Dropbox
 PACKAGES+=(python3-gpg)
 
