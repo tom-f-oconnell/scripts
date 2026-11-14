@@ -22,20 +22,9 @@ fi
 # TODO way to make it just prompt for password if run as non-root?
 
 # Last checked against Ubuntu 26.04 (2026-11-13): every package installed below has an
-# install candidate there. Nothing below needs a PPA anymore, so none are added.
+# install candidate there, and none needs a PPA.
 
 # TODO put some stuff behind option for my personal vs work computers?
-
-# No longer supported / needed as of 26.04 (all PPAs this script used to add):
-# - ppa:ubuntuhandbook1/keepass2 (and ppa:eugenesan/ppa before it, for keepassx):
-#   keepassxc, in the main repos, replaces both (opens the same .kdbx files)
-# - ppa:deadsnakes/ppa: was for python3.8, which it no longer builds for 26.04. The
-#   system python3 is 3.14. For other versions, `uv python install <version>` (or conda).
-# - ppa:git-core/ppa: was for a git recent enough for git-filter-repo. 26.04 has 2.53.
-# - ppa:apandada1/brightness-controller: has no packages for 26.04
-
-# TODO TODO did i end up getting latest git from a ppa (to get version
-# sufficient for 3rd party filter-repo)? if so, add that
 
 # not compiled w/ python supported needed for python YCM to work it seems
 #add-apt-repository -y ppa:jonathonf/vim
@@ -99,7 +88,7 @@ PACKAGES+=(openssh-server)
 # NOTE: since 23.04, pip refuses to install outside a venv (PEP 668), `--user` included.
 PACKAGES+=(python3-pip python3-venv python3-dev python3-tk)
 
-# No longer supported: python3.8 is not in 26.04, nor in the deadsnakes PPA for it.
+# No longer supported: python3.8 is not in 26.04.
 # The unversioned packages above are the system python (3.14) equivalents.
 #apt install -y python3.8 python3.8-dev python3.8-venv python3.8-tk
 
